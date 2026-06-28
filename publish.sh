@@ -25,7 +25,7 @@ fi
 if git remote get-url origin >/dev/null 2>&1; then
     REMOTE=$(git remote get-url origin)
     echo "[已配置远程] $REMOTE"
-else:
+else
     echo "请输入你的 GitHub 用户名:"
     read -r USERNAME
     if [ -z "$USERNAME" ]; then
