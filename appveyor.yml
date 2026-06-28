@@ -1,0 +1,39 @@
+version: 1.0.{build}
+
+image: Visual Studio 2022
+
+environment:
+  matrix:
+    - PYTHON: "C:\\Python311-x64"
+    - PYTHON: "C:\\Python312-x64"
+
+install:
+  - set "PATH=%PYTHON%;%PYTHON%\Scripts;%PATH%"
+  - python --version
+  - python -m pip install --upgrade pip
+  - python -m pip install pyinstaller
+
+build: off
+
+# 1. 跑核心模块自测
+test_script:
+  - python -c "import yi_core; assert len(yi_core.HEX)==64; print('OK 64 hexagrams')"
+  - python -c "import yi_gui; print('OK GUI module imports')"
+
+# 2. PyInstaller 出 YiJing.exe
+build_script:
+  - python -m PyInstaller --onefile --windowed --name YiJing --noconfirm --clean --collect-all tkinter yi_gui.py
+  - if not exist "dist\YiJing.exe" exit /b 1
+  - dir dist\YiJing.exe
+
+# 3. 产物发 artifact
+artifacts:
+  - path: dist\YiJing.exe
+    name: YiJing-windows-exe
+
+# 4. tag 自动发 Release
+deploy_script:
+  - ps: |
+      if ($env:APPVEYOR_REPO_TAG -eq 'true') {
+          Write-Host "tag detected, would auto-release (configured via AppVeyor UI)"
+      }
