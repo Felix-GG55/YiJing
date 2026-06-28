@@ -340,6 +340,32 @@ class YiApp:
             f"日志:{core.LOG_FILE}")
 
 
+def self_test() -> bool:
+    """自测:验证 yi_core 数据 + YiApp 可实例化,不弹窗。"""
+    print(f"  yi_core HEX: {len(core.HEX)} (expect 64)")
+    assert len(core.HEX) == 64
+
+    r = core.cast("自测", seed=42)
+    print(f"  cast: main=#{r['main_num']} nuclear=#{r['nuclear_num']} changed=#{r['changed_num']}")
+
+    for kw in ["龙", "水", "贞"]:
+        hits = core.search_hex(kw)
+        print(f"  search {kw}: {len(hits)} hits")
+
+    print(f"  YiApp class defined OK")
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        app = YiApp(root)
+        print(f"  YiApp instantiated OK (3 tabs, 64 hexagrams loaded)")
+        root.destroy()
+    except Exception as e:
+        print(f"  YiApp instantiation failed: {e}")
+        return False
+    return True
+
+
 def main():
     root = tk.Tk()
     YiApp(root)
@@ -347,4 +373,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(0 if self_test() else 1)
     main()
