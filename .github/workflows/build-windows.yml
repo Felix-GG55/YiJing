@@ -1,0 +1,67 @@
+name: build-windows-exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Sanity check (core module)
+        run: |
+          python -c "import yi_core; assert len(yi_core.HEXAGRAMS)==64, 'need 64 hexagrams'; print('core OK, 64 hexagrams loaded')"
+
+      - name: Build YiJing.exe
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --windowed `
+            --name YiJing `
+            --noconfirm `
+            --clean `
+            --collect-all tkinter `
+            yi_gui.py
+
+      - name: Verify exe
+        run: |
+          if (-not (Test-Path "dist\YiJing.exe")) { throw "YiJing.exe not produced" }
+          $size = (Get-Item "dist\YiJing.exe").Length
+          Write-Host "YiJing.exe built: $size bytes"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YiJing-windows-exe
+          path: dist/YiJing.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/YiJing.exe
+          generate_release_notes: true
