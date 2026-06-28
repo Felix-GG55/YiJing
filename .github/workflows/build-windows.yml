@@ -30,9 +30,8 @@ jobs:
       - name: Install PyInstaller
         run: python -m pip install --upgrade pip pyinstaller
 
-      - name: Sanity check (core module)
-        run: |
-          python -c "import yi_core; assert len(yi_core.HEXAGRAMS)==64, 'need 64 hexagrams'; print('core OK, 64 hexagrams loaded')"
+      - name: Self-test (core + Tk + YiApp)
+        run: python yi_gui.py --self-test
 
       - name: Build YiJing.exe
         run: |
