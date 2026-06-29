@@ -37,28 +37,47 @@ jobs:
       - name: Self-test (core + Tk + YiApp)
         run: python yi_gui.py --self-test
 
-      - name: Build YiJing.exe
+      - name: Build YiJing.exe (onedir via spec)
         run: |
           python -m PyInstaller `
-            --onefile `
-            --windowed `
-            --name YiJing `
+            YiJing.spec `
             --noconfirm `
-            --clean `
-            --collect-all tkinter `
-            yi_gui.py
+            --clean
 
-      - name: Verify exe
+      - name: Verify onedir layout
         run: |
-          if (-not (Test-Path "dist\YiJing.exe")) { throw "YiJing.exe not produced" }
-          $size = (Get-Item "dist\YiJing.exe").Length
-          Write-Host "YiJing.exe built: $size bytes"
+          # PyInstaller 6.x onedir: bootloader+PYZ+modules all live inside YiJing.exe (PKG archive).
+          # _internal/ has tkinter data + Windows DLLs + base_library.zip, but NOT separate .pyc/.pyz.
+          # Therefore we verify embedded correctness via strings + base_library size + pyd counts.
+          if (-not (Test-Path "dist\YiJing\YiJing.exe")) { throw "YiJing.exe not produced" }
+          if (-not (Test-Path "dist\YiJing\_internal\base_library.zip")) { throw "base_library.zip missing in _internal" }
+          $pydCount = (Get-ChildItem -Path "dist\YiJing\_internal" -Recurse -Filter "*.pyd" | Measure-Object).Count
+          if ($pydCount -lt 10) { throw "_internal has only $pydCount .pyd modules (expected 10+)" }
+          $exeSize = (Get-Item "dist\YiJing\YiJing.exe").Length
+          if ($exeSize -lt 3000000) { throw "YiJing.exe only $exeSize bytes (expected 3MB+ for bootloader+PYG)" }
+          $intSize = (Get-ChildItem -Path "dist\YiJing\_internal" -Recurse | Measure-Object -Property Length -Sum).Sum
+          # Embedded modules check: yi_gui, yi_core, yi_expert must be inside YiJing.exe
+          $hasCore = (Select-String -Path "dist\YiJing\YiJing.exe" -Pattern "yi_core" -SimpleMatch -Quiet)
+          $hasExpert = (Select-String -Path "dist\YiJing\YiJing.exe" -Pattern "yi_expert" -SimpleMatch -Quiet)
+          if (-not $hasCore)   { throw "yi_core not embedded in YiJing.exe (PKG missing pure modules)" }
+          if (-not $hasExpert) { throw "yi_expert not embedded (AI module missing)" }
+          Write-Host "YiJing.exe: $exeSize bytes (bootloader + PKG)"
+          Write-Host "_internal : $intSize bytes ($pydCount pyd + tkinter + bases)"
+          Write-Host "embeds   : yi_core=YES yi_expert=YES"
+          Write-Host "ONEDIR OK"
+
+      - name: Zip artifact
+        run: |
+          Compress-Archive -Path dist/YiJing/* -DestinationPath dist/YiJing-windows-exe.zip -Force
+          Write-Host "zipped: $((Get-Item dist/YiJing-windows-exe.zip).Length) bytes"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: YiJing-windows-exe
-          path: dist/YiJing.exe
+          path: |
+            dist/YiJing/YiJing.exe
+            dist/YiJing-windows-exe.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -66,5 +85,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/YiJing.exe
+          files: |
+            dist/YiJing/YiJing.exe
+            dist/YiJing-windows-exe.zip
           generate_release_notes: true
