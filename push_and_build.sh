@@ -61,7 +61,26 @@ echo "==> 3/6  push 代码到 $USERNAME/$REPO"
 git remote remove origin 2>/dev/null || true
 git remote add origin "$REPO_URL"
 git branch -M main 2>/dev/null || true
-git push -u origin main --force
+# macOS 默认用 SecureTransport,有些网络下不稳。降到 OpenSSL,并重试
+git config --global http.sslBackend openssl 2>/dev/null || true
+
+PUSH_OK=0
+for TRY in 1 2 3 4 5; do
+  echo "    [尝试 $TRY/5]"
+  if GIT_TERMINAL_PROMPT=0 git push -u origin main --force 2>&1; then
+    PUSH_OK=1
+    break
+  fi
+  echo "    push 失败,$((TRY*5))s 后重试..."
+  sleep $((TRY*5))
+done
+if [ "$PUSH_OK" != "1" ]; then
+  echo "[错误] push 5 次都失败。请手动排查:"
+  echo "  1) git config --global http.version HTTP/1.1"
+  echo "  2) git config --global http.sslBackend openssl"
+  echo "  3) 终端手动:cd ~/Documents/qi/yijing-release && GIT_TRACE=1 git push -u origin main --force"
+  exit 1
+fi
 
 echo "==> 4/6  触发 workflow build-windows-exe"
 DISP=$(curl -sS -X POST -H "$AUTH" -H "$VER" -H "$GHV" \
