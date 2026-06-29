@@ -18,7 +18,7 @@ API="https://api.github.com"
 AUTH="Authorization: token $TOKEN"
 VER="Accept: application/vnd.github+json"
 GHV="X-GitHub-Api-Version: 2022-11-28"
-REPO="yijing-release"
+REPO="${REPO:-yijing}"
 WF="build-windows.yml"
 
 echo "==> 1/6  验证 token"
