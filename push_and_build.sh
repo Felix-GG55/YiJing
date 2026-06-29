@@ -53,6 +53,9 @@ else
   exit 1
 fi
 
+# 沙箱网络对 GitHub 的 HTTP/2 支持有问题,降到 HTTP/1.1
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
 REPO_URL="https://x-access-token:$TOKEN@github.com/$USERNAME/$REPO.git"
 echo "==> 3/6  push 代码到 $USERNAME/$REPO"
 git remote remove origin 2>/dev/null || true
