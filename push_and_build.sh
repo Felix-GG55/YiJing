@@ -146,10 +146,14 @@ cd ..
 
 echo
 echo "============================================"
-if [ -f dist_win/dist/YiJing.exe ]; then
-  SIZE=$(stat -f%z dist_win/dist/YiJing.exe 2>/dev/null || stat -c%s dist_win/dist/YiJing.exe 2>/dev/null)
+EXE_PATH=""
+for p in dist_win/dist/YiJing.exe dist_win/YiJing.exe; do
+  if [ -f "$p" ]; then EXE_PATH="$p"; break; fi
+done
+if [ -n "$EXE_PATH" ]; then
+  SIZE=$(stat -f%z "$EXE_PATH" 2>/dev/null || stat -c%s dist_win/dist/YiJing.exe 2>/dev/null)
   echo " 完成!YiJing.exe 已生成"
-  echo " 路径:$(pwd)/dist_win/dist/YiJing.exe"
+  echo " 路径:$(pwd)/$EXE_PATH"
   echo " 大小:${SIZE} 字节(约 $((SIZE/1048576)) MB)"
   echo " 直接双击运行,或拷给任何 Windows 用户"
 else
