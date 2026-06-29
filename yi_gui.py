@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import yi_core as core
+import yi_expert
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
@@ -28,6 +29,10 @@ class YiApp:
         self._build_menu()
         self._build_tabs()
 
+        self.last_cast = None
+        self.expert_full = ''
+        self.expert_busy = False
+
     # ---------- 菜单 ----------
     def _build_menu(self):
         menubar = tk.Menu(self.root)
@@ -35,6 +40,7 @@ class YiApp:
         filem.add_command(label="起卦  Ctrl+N", command=lambda: self.notebook.select(0))
         filem.add_command(label="查看 64 卦  Ctrl+B", command=lambda: self.notebook.select(1))
         filem.add_command(label="查看日志  Ctrl+L", command=lambda: self.notebook.select(2))
+        filem.add_command(label="AI 解卦  Ctrl+E", command=lambda: self.notebook.select(3))
         filem.add_separator()
         filem.add_command(label="退出  Ctrl+Q", command=self.root.quit)
         menubar.add_cascade(label="文件", menu=filem)
@@ -48,6 +54,7 @@ class YiApp:
         self.root.bind("<Control-n>", lambda e: self.notebook.select(0))
         self.root.bind("<Control-b>", lambda e: self.notebook.select(1))
         self.root.bind("<Control-l>", lambda e: self.notebook.select(2))
+        self.root.bind("<Control-e>", lambda e: self.notebook.select(3))
         self.root.bind("<Control-q>", lambda e: self.root.quit())
 
     # ---------- 标签页 ----------
@@ -58,13 +65,16 @@ class YiApp:
         self.tab_cast = ttk.Frame(self.notebook)
         self.tab_browse = ttk.Frame(self.notebook)
         self.tab_log = ttk.Frame(self.notebook)
+        self.tab_expert = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_cast, text="  起 卦  ")
         self.notebook.add(self.tab_browse, text="  64 卦  ")
         self.notebook.add(self.tab_log, text="  日 志  ")
+        self.notebook.add(self.tab_expert, text="  AI解卦  ")
 
         self._build_cast_tab()
         self._build_browse_tab()
         self._build_log_tab()
+        self._build_expert_tab()
 
     # ---------- 起卦 ----------
     def _build_cast_tab(self):
@@ -199,7 +209,9 @@ class YiApp:
             "nuclear_num": nuclear[0],
             "changed_num": changed[0] if any_change else None,
         }
+        self.last_cast = result
         core.append_log(result)
+        self._refresh_expert_context()
 
     def _clear_cast(self):
         self.q_var.set("")
@@ -338,6 +350,193 @@ class YiApp:
             "依据:王弼注 / 朱熹 周易本义(宋,公版)\n"
             "跨平台:Python 3.7+ / Tkinter\n"
             f"日志:{core.LOG_FILE}")
+
+
+    # ---------- AI解卦 ----------
+    def _build_expert_tab(self):
+        top = ttk.Frame(self.tab_expert)
+        top.pack(fill="x", padx=8, pady=8)
+        self.expert_summary_var = tk.StringVar(value="(尚未起卦)")
+        ttk.Label(top, text="本卦:", font=("", 10, "bold")).pack(side="left")
+        ttk.Label(top, textvariable=self.expert_summary_var, foreground="#444").pack(side="left", padx=(4, 12))
+        ttk.Label(top, text="额外说明(可选):").pack(side="left")
+        self.expert_q_var = tk.StringVar()
+        ttk.Entry(top, textvariable=self.expert_q_var, width=30).pack(side="left", padx=4)
+
+        btns = ttk.Frame(self.tab_expert)
+        btns.pack(fill="x", padx=8, pady=(0, 6))
+        self.btn_ask = ttk.Button(btns, text="请道士解卦", command=self._ask_expert)
+        self.btn_ask.pack(side="left", padx=2)
+        ttk.Button(btns, text="设置 API", command=self._show_expert_config).pack(side="left", padx=2)
+        ttk.Button(btns, text="复制结果", command=self._copy_expert).pack(side="left", padx=2)
+        ttk.Button(btns, text="保存到日志", command=self._save_expert_to_log).pack(side="left", padx=2)
+        ttk.Button(btns, text="清空", command=self._clear_expert).pack(side="left", padx=2)
+
+        body = ttk.Frame(self.tab_expert)
+        body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.expert_text = tk.Text(body, wrap="word", padx=8, pady=8)
+        self.expert_text.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.expert_text.yview)
+        sb.pack(side="right", fill="y")
+        self.expert_text.config(yscrollcommand=sb.set, state="disabled")
+        self.expert_text.tag_configure("header", font=("Helvetica", 12, "bold"), foreground="#8B4513", spacing1=6, spacing3=2)
+        self.expert_text.tag_configure("meta", foreground="#666")
+        self.expert_text.tag_configure("err", foreground="#c00")
+
+    def _refresh_expert_context(self):
+        if not self.last_cast:
+            self.expert_summary_var.set("(尚未起卦)")
+            return
+        r = self.last_cast
+        main = core.HEX_BY_NUM.get(r["main_num"])
+        moving = [i for i, l in enumerate(r["lines"], 1) if l[2] in ("老阴", "老阳")]
+        s = f"#{main[0]} {main[1]}"
+        if moving:
+            s += f"  动爻:{','.join(map(str, moving))}爻"
+        else:
+            s += "  无动爻"
+        s += f"   问:{r['question'] or '(无)'}"
+        self.expert_summary_var.set(s)
+
+    def _append_expert(self, text, tag=None):
+        self.expert_text.config(state="normal")
+        if tag:
+            self.expert_text.insert("end", text, tag)
+        else:
+            self.expert_text.insert("end", text)
+        self.expert_text.see("end")
+        self.expert_text.config(state="disabled")
+
+    def _clear_expert(self):
+        self.expert_text.config(state="normal")
+        self.expert_text.delete("1.0", "end")
+        self.expert_text.config(state="disabled")
+        self.expert_full = ""
+
+    def _ask_expert(self):
+        if self.expert_busy:
+            messagebox.showinfo("提示", "道士还在解卦,请稍候...")
+            return
+        if not self.last_cast:
+            messagebox.showwarning("提示", "请先在 '起卦' 标签起一卦。")
+            self.notebook.select(0)
+            return
+        cfg = yi_expert.load_config()
+        if not cfg.get("api_key"):
+            self._show_expert_config()
+            cfg = yi_expert.load_config()
+            if not cfg.get("api_key"):
+                return
+        self._clear_expert()
+        self._append_expert("道士正在解卦,请稍候...\n\n", "meta")
+        self.expert_busy = True
+        self.btn_ask.config(state="disabled", text="解卦中...")
+        extra = self.expert_q_var.get().strip()
+        q = self.last_cast["question"] or ""
+        if extra:
+            q = (q + " | " + extra) if q else extra
+        cast_result = self.last_cast
+        root = self.root
+
+        def on_token(tok):
+            root.after(0, lambda: self._append_expert(tok))
+
+        def on_done(full):
+            def _():
+                self.expert_full = full
+                self.expert_busy = False
+                self.btn_ask.config(state="normal", text="请道士解卦")
+                self._highlight_headers()
+            root.after(0, _)
+
+        def on_error(err):
+            def _():
+                self._append_expert("\n\n[出错] " + err + "\n", "err")
+                self.expert_busy = False
+                self.btn_ask.config(state="normal", text="请道士解卦")
+            root.after(0, _)
+
+        yi_expert.ask_stream(q, cast_result, on_token, on_done, on_error)
+
+    def _highlight_headers(self):
+        text = self.expert_text.get("1.0", "end")
+        if "**" not in text:
+            return
+        self.expert_text.config(state="normal")
+        self.expert_text.delete("1.0", "end")
+        import re
+        parts = re.split(r"(\*\*[^*]+\*\*)", text)
+        for p in parts:
+            if p.startswith("**") and p.endswith("**") and len(p) > 4:
+                self.expert_text.insert("end", p[2:-2] + "\n", "header")
+            else:
+                self.expert_text.insert("end", p)
+        self.expert_text.config(state="disabled")
+
+    def _copy_expert(self):
+        if not self.expert_full:
+            messagebox.showinfo("提示", "尚无解卦结果。")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.expert_full)
+        messagebox.showinfo("已复制", "解卦文本已复制到剪贴板。")
+
+    def _save_expert_to_log(self):
+        if not self.expert_full or not self.last_cast:
+            messagebox.showinfo("提示", "尚无解卦结果。")
+            return
+        try:
+            from datetime import datetime
+            with open(core.LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"\n\n## AI解卦 {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
+                f.write(self.expert_full + "\n")
+            messagebox.showinfo("已保存", f"解卦文本已追加到日志:\n{core.LOG_FILE}")
+        except Exception as e:
+            messagebox.showerror("保存失败", str(e))
+
+    def _show_expert_config(self):
+        win = tk.Toplevel(self.root)
+        win.title("设置 AI 解卦 API")
+        win.geometry("540x320")
+        win.transient(self.root)
+        win.grab_set()
+
+        cfg = yi_expert.load_config()
+        ttk.Label(win, text="API Key:", padding=(8, 8, 0, 0)).pack(anchor="w")
+        key_var = tk.StringVar(value=cfg.get("api_key", ""))
+        ent = ttk.Entry(win, textvariable=key_var, width=70, show="*")
+        ent.pack(padx=8, pady=4, fill="x")
+
+        ttk.Label(win, text="Base URL(OpenAI 兼容):", padding=(8, 8, 0, 0)).pack(anchor="w")
+        url_var = tk.StringVar(value=cfg.get("base_url", "https://api.deepseek.com/v1"))
+        ttk.Entry(win, textvariable=url_var, width=70).pack(padx=8, pady=4, fill="x")
+
+        ttk.Label(win, text="Model:", padding=(8, 8, 0, 0)).pack(anchor="w")
+        model_var = tk.StringVar(value=cfg.get("model", "deepseek-chat"))
+        ttk.Entry(win, textvariable=model_var, width=70).pack(padx=8, pady=4, fill="x")
+
+        ttk.Label(win, text="默认:DeepSeek(便宜,中文好)。可换 OpenAI/Qwen/GLM 等 OpenAI 兼容服务。",
+                  foreground="#666", padding=(8, 8, 0, 4)).pack(anchor="w")
+
+        def save():
+            yi_expert.save_config({
+                "api_key": key_var.get().strip(),
+                "base_url": url_var.get().strip() or "https://api.deepseek.com/v1",
+                "model": model_var.get().strip() or "deepseek-chat",
+            })
+            messagebox.showinfo("已保存", "配置已保存到:\n" + str(yi_expert.CONFIG_FILE), parent=win)
+            win.destroy()
+
+        def show_key():
+            ent.config(show="" if ent.cget("show") == "*" else "*")
+
+        bf = ttk.Frame(win)
+        bf.pack(pady=12)
+        ttk.Button(bf, text="显示/隐藏 Key", command=show_key).pack(side="left", padx=4)
+        ttk.Button(bf, text="保存", command=save).pack(side="left", padx=4)
+        ttk.Button(bf, text="取消", command=win.destroy).pack(side="left", padx=4)
+
+        ent.focus_set()
 
 
 def self_test() -> bool:
