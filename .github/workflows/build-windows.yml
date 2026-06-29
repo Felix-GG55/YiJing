@@ -6,6 +6,10 @@ on:
     branches: [main]
     tags: ['v*']
 
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: '1'
+
 permissions:
   contents: write
 

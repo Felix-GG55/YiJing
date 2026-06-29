@@ -8,6 +8,12 @@
 import datetime, random, sys
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 LOG_FILE = Path.home() / "Documents" / "qi" / "notes" / "yi_log.md"
 
 # 八卦 (先天序) 阳=1 阴=0 自下而上
