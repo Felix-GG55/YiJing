@@ -161,8 +161,12 @@ HEX = [
      ("初六:濡其尾,吝","九二:曳其轮,贞吉","六三:未济,征凶,利涉大川","九四:贞吉,悔亡,震用伐鬼方","六五:贞吉,无悔,君子之光","上九:有孚于饮酒,无咎")),
 ]
 
-HEX_BY_BIN = {h[4]: h for h in HEX}
 HEX_BY_NUM = {h[0]: h for h in HEX}
+# binary 查表:文王卦序里 #28 大过 与 #61 中孚 同形(011110),
+# 改用 list,起卦时随机选其中一个
+HEX_BY_BIN = {}
+for _h in HEX:
+    HEX_BY_BIN.setdefault(_h[4], []).append(_h)
 
 # ---------------------------------------------------------------------------
 # 三钱法
@@ -246,11 +250,11 @@ def cast(question, seed=None):
         out.append(f"  第{i}爻:三钱合计 {s} → {lbl}")
 
     main_bin = lines_to_binary(lines)
-    main = HEX_BY_BIN[main_bin]
+    main = random.choice(HEX_BY_BIN[main_bin])
     nuclear_bin = nuclear_hex(lines)
-    nuclear = HEX_BY_BIN[nuclear_bin]
+    nuclear = random.choice(HEX_BY_BIN[nuclear_bin])
     changed_bin = changed_binary(lines)
-    changed = HEX_BY_BIN[changed_bin]
+    changed = random.choice(HEX_BY_BIN[changed_bin])
     any_change = any(l[2] in ("老阴", "老阳") for l in lines)
 
     out.append("\n" + "-" * 50)
@@ -288,9 +292,9 @@ def append_log(result):
         LOG_FILE.write_text("# 易卦日志\n\n", encoding="utf-8")
     lines = [(s, v, l) for s, v, l in result["lines"]]
     main_bin = lines_to_binary(lines)
-    main = HEX_BY_BIN[main_bin]
+    main = random.choice(HEX_BY_BIN[main_bin])
     nuclear_bin = nuclear_hex(lines)
-    nuclear = HEX_BY_BIN[nuclear_bin]
+    nuclear = random.choice(HEX_BY_BIN[nuclear_bin])
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(f"\n## {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
         f.write(f"- 所问:{result['question'] or '(无)'}\n")
@@ -298,7 +302,7 @@ def append_log(result):
         f.write(f"- 互卦:#{nuclear[0]} {nuclear[1]}\n")
         if result.get("changed_num"):
             changed_bin = changed_binary(lines)
-            c = HEX_BY_BIN[changed_bin]
+            c = random.choice(HEX_BY_BIN[changed_bin])
             f.write(f"- 变卦:#{c[0]} {c[1]}\n")
         else:
             f.write("- 变卦:无动爻\n")
