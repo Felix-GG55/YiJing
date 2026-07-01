@@ -14,6 +14,16 @@ hiddenimports = []
 # 自带典籍清单(JSON,131 本),运行时随 EXE 发布
 datas += [('yi_books_manifest.json', '.')]
 
+# v4.1 资源
+ICON_ICO = 'assets/icon.ico'
+ICON_PNG = 'assets/icon.png'
+MANTRA_WAV = 'assets/sounds/mantra.wav'
+
+if os.path.exists(ICON_PNG):
+    datas += [(ICON_PNG, '.')]
+if os.path.exists(MANTRA_WAV):
+    datas += [(MANTRA_WAV, 'sounds')]
+
 tmp_ret = collect_all('tkinter')
 datas += tmp_ret[0]
 binaries += tmp_ret[1]
@@ -54,6 +64,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=ICON_ICO if os.path.exists(ICON_ICO) else None,
 )
 
 coll = COLLECT(

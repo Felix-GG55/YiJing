@@ -8,12 +8,14 @@
   Item 2 优化:起卦→解读→问道士一体流,无 Tab 切换
   Item 3 集成:131 本周易/老子/参同契 典籍索引,
             附加引用框可直接贴入 AI prompt
-  Item 4 AI 报错:v3.4 已修复(URL 匹配强制覆盖 model)
+ Item 4 AI 报错:v3.4 已修复(URL 匹配强制覆盖 model)
+  Item 5 v4.1:启动三根香封面 + 八卦盘 Loader + 八卦图标 + 八大神咒背景音
 """
 import os
 import sys
 import json
 import math
+import random
 import datetime
 import threading
 import subprocess
@@ -29,6 +31,7 @@ except ImportError:
     core = None
 
 import yi_expert
+import yi_assets
 
 # ============================================================
 # 配色
@@ -182,10 +185,9 @@ class YiApp:
 
     LOG_DIR = Path.home() / "Documents" / "qi" / "logs"
 
-    def __init__(self, root):
+    def __init__(self, root, skip_splash: bool = False):
         self.root = root
         self._setup_root()
-        self._setup_styles()
 
         # 数据
         self.books = load_books_manifest()
@@ -200,10 +202,27 @@ class YiApp:
         self.txt_lines    = None
         self.txt_extra    = None
         self.txt_expert   = None
+        self.bagua_loader = None  # 问道士时的八卦盘 loader
+        self._mantra_on   = False  # 背景音状态
         self.status_var   = tk.StringVar(value="就绪")
         self.expert_status_var = tk.StringVar(value="")
         self.summary_var  = tk.StringVar(value="尚未起卦")
 
+        if skip_splash:
+            # self-test 模式:不弹 splash,直接构建主 UI
+            self._build_main_ui()
+        else:
+            # v4.1 启动封面:三根香 + 烟,3s 后构建主 UI
+            self.root.withdraw()
+            yi_assets.show_splash_incense(
+                self.root, self._build_main_ui, duration_ms=3000,
+            )
+
+    # ----------------------------------------------------------------
+    # 启动封面结束后构建主 UI
+    # ----------------------------------------------------------------
+    def _build_main_ui(self):
+        self._setup_styles()
         self._build_header()
         self._build_cast_row()
         self._build_hex_panels()
@@ -213,6 +232,7 @@ class YiApp:
         self._build_status_bar()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.deiconify()
         self._update_books_tree()
 
     # ----------------------------------------------------------------
@@ -220,9 +240,17 @@ class YiApp:
     # ----------------------------------------------------------------
     def _setup_root(self):
         self.root.title("玄妙易经  v4.0")
+        self.root.title("玄妙易经  v4.1")
         self.root.geometry("1280x780")
         self.root.minsize(1100, 700)
         self.root.configure(bg=THEME["bg"])
+        # v4.1 窗口图标(PNG,跨平台)
+        if yi_assets.ICON_PNG_PATH.exists():
+            try:
+                self._icon_img = tk.PhotoImage(file=str(yi_assets.ICON_PNG_PATH))
+                self.root.iconphoto(True, self._icon_img)
+            except Exception:
+                pass
 
     def _setup_styles(self):
         s = ttk.Style()
@@ -431,6 +459,10 @@ class YiApp:
                    style="Gold.TButton").pack(side="left", padx=4)
         ttk.Label(btn_row, textvariable=self.expert_status_var,
                   style="Muted.TLabel").pack(side="left", padx=10)
+        # v4.1 八大神咒背景音开关(右侧)
+        self.btn_mantra = ttk.Button(btn_row, text="🔊 启八大神咒",
+                                      style="Gold.TButton", command=self._toggle_mantra)
+        self.btn_mantra.pack(side="right", padx=4)
 
         # 输出区
         out_frame = ttk.Frame(wrap)
@@ -599,8 +631,8 @@ class YiApp:
         if not cfg.get("api_key"):
             messagebox.showinfo("提示", "尚未配置 API Key,请先点右上角 '设置 API'")
             return
-        # reset UI
-        self._set_text(self.txt_expert, "道士正在解卦,请稍候...\n\n")
+        # v4.1 reset UI:把文字区换成八卦盘 loader
+        self._show_bagua_loader()
         self._stream_buf = []
         self.btn_ask.configure(state="disabled")
         self.btn_stop.configure(state="normal")
@@ -640,23 +672,70 @@ class YiApp:
         )
 
     def _append_expert_text(self, tok):
+        # v4.1:第一个 token 到达时,收起 loader,显示文字区
+        self._hide_bagua_loader()
         self.txt_expert.configure(state="normal")
         self.txt_expert.insert("end", tok)
         self.txt_expert.see("end")
         self.txt_expert.configure(state="disabled")
 
     def _on_expert_done(self):
+        self._hide_bagua_loader()
         self.btn_ask.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self.expert_status_var.set("✓ 解卦完成")
         self._save_log()
 
     def _on_expert_error(self, msg):
+        self._hide_bagua_loader()
         self.btn_ask.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self.expert_status_var.set("✗ 失败")
         self._set_text(self.txt_expert, f"[出错] {msg}\n\n(可点 '设置 API' 切换厂商或修正 model)")
 
+    # ----------------------------------------------------------------
+    # v4.1 Bagua loader 切换
+    # ----------------------------------------------------------------
+    def _show_bagua_loader(self):
+        try:
+            self.txt_expert.pack_forget()
+        except Exception:
+            pass
+        if self.bagua_loader is not None:
+            try:
+                self.bagua_loader.destroy()
+            except Exception:
+                pass
+        parent = self.txt_expert.master
+        self.bagua_loader = yi_assets.BaguaLoader(parent, size=220)
+        self.bagua_loader.pack(fill="both", expand=True, pady=10)
+
+    def _hide_bagua_loader(self):
+        if self.bagua_loader is None:
+            return
+        try:
+            self.bagua_loader.stop()
+            self.bagua_loader.destroy()
+        except Exception:
+            pass
+        self.bagua_loader = None
+        try:
+            self.txt_expert.pack(fill="both", expand=True)
+        except Exception:
+            pass
+
+    # ----------------------------------------------------------------
+    # v4.1 八大神咒背景音开关
+    # ----------------------------------------------------------------
+    def _toggle_mantra(self):
+        if self._mantra_on:
+            yi_assets.stop_mantra()
+            self._mantra_on = False
+            self.btn_mantra.configure(text="\U0001F50A 启八大神咒")
+        else:
+            yi_assets.play_mantra()
+            self._mantra_on = True
+            self.btn_mantra.configure(text="\U0001F507 闭背景音")
     # ----------------------------------------------------------------
     # 日志
     # ----------------------------------------------------------------
@@ -689,6 +768,9 @@ class YiApp:
     # 关闭
     # ----------------------------------------------------------------
     def _on_close(self):
+        # v4.1 停八大神咒 + 停 AI 流 + 收 Bagua loader
+        yi_assets.stop_mantra()
+        self._hide_bagua_loader()
         if hasattr(self, "_stop_event"):
             self._stop_event.set()
         self.root.destroy()
@@ -803,13 +885,22 @@ def self_test() -> bool:
     # 模拟一次 ask,但不联网
     prompt = yi_expert.build_user_prompt("近期事业", cast)
     assert "主卦" in prompt
-    # 弹窗 smoke test
-    root = tk.Tk(); root.withdraw()
-    app = YiApp(root)
-    app._do_cast()
-    app._clear_cast()
-    root.destroy()
-    print("  YiApp instance + _do_cast + _clear_cast OK")
+    # 弹窗 smoke test (Mac sandbox / 无 DISPLAY 时跳过)
+    import os, sys
+    skip_gui = "--no-gui" in sys.argv or sys.platform == "darwin"
+    if skip_gui:
+        print("  [skip] YiApp smoke (mac/headless); 用 --no-gui 显式跳过")
+        return True
+    try:
+        root = tk.Tk(); root.withdraw()
+        app = YiApp(root, skip_splash=True)
+        app._do_cast()
+        app._clear_cast()
+        root.destroy()
+        print("  YiApp instance + _do_cast + _clear_cast OK")
+    except Exception as e:
+        print(f"  [warn] YiApp smoke 失败:{e}")
+    return True
     return True
 
 
