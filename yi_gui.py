@@ -497,29 +497,64 @@ class YiApp:
     def _show_expert_config(self):
         win = tk.Toplevel(self.root)
         win.title("设置 AI 解卦 API")
-        win.geometry("540x320")
+        win.geometry("560x420")
         win.transient(self.root)
         win.grab_set()
 
+        # 预设表
+        PRESETS = {
+            "DeepSeek(默认,中文好,便宜)":  ("https://api.deepseek.com/v1",        "deepseek-chat"),
+            "OpenAI":                         ("https://api.openai.com/v1",          "gpt-4o-mini"),
+            "通义千问 Qwen":                  ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
+            "智谱 GLM":                       ("https://open.bigmodel.cn/api/paas/v4","glm-4-flash"),
+            "月之暗面 Moonshot":              ("https://api.moonshot.cn/v1",         "moonshot-v1-8k"),
+            "MiniMax / MiniMax":              ("https://api.MiniMax.chat/v1",        "MiniMax-Text-01"),
+            "自定义(手动填 URL/Model)":      ("",                                  ""),
+        }
+        names = list(PRESETS.keys())
+
         cfg = yi_expert.load_config()
+        url_var = tk.StringVar(value=cfg.get("base_url", "https://api.deepseek.com/v1"))
+        model_var = tk.StringVar(value=cfg.get("model", "deepseek-chat"))
+
+        ttk.Label(win, text="提供商预设(选完自动填 URL/Model,可再改):", padding=(8, 8, 0, 0)).pack(anchor="w")
+        preset_var = tk.StringVar(value=names[0])
+        # 反查当前 cfg 匹配哪个预设
+        for n, (u, m) in PRESETS.items():
+            if u == url_var.get() and m == model_var.get():
+                preset_var.set(n)
+                break
+        preset_combo = ttk.Combobox(win, textvariable=preset_var, values=names, state="readonly", width=50)
+        preset_combo.pack(padx=8, pady=4, fill="x")
+
         ttk.Label(win, text="API Key:", padding=(8, 8, 0, 0)).pack(anchor="w")
         key_var = tk.StringVar(value=cfg.get("api_key", ""))
         ent = ttk.Entry(win, textvariable=key_var, width=70, show="*")
         ent.pack(padx=8, pady=4, fill="x")
 
         ttk.Label(win, text="Base URL(OpenAI 兼容):", padding=(8, 8, 0, 0)).pack(anchor="w")
-        url_var = tk.StringVar(value=cfg.get("base_url", "https://api.deepseek.com/v1"))
-        ttk.Entry(win, textvariable=url_var, width=70).pack(padx=8, pady=4, fill="x")
+        url_entry = ttk.Entry(win, textvariable=url_var, width=70)
+        url_entry.pack(padx=8, pady=4, fill="x")
 
         ttk.Label(win, text="Model:", padding=(8, 8, 0, 0)).pack(anchor="w")
-        model_var = tk.StringVar(value=cfg.get("model", "deepseek-chat"))
-        ttk.Entry(win, textvariable=model_var, width=70).pack(padx=8, pady=4, fill="x")
+        model_entry = ttk.Entry(win, textvariable=model_var, width=70)
+        model_entry.pack(padx=8, pady=4, fill="x")
 
-        ttk.Label(win, text="默认:DeepSeek(便宜,中文好)。可换 OpenAI/Qwen/GLM 等 OpenAI 兼容服务。",
-                  foreground="#666", padding=(8, 8, 0, 4)).pack(anchor="w")
+        def on_preset(_evt=None):
+            n = preset_var.get()
+            if n == "自定义(手动填 URL/Model)":
+                return
+            u, m = PRESETS[n]
+            url_var.set(u)
+            model_var.set(m)
+        preset_combo.bind("<<ComboboxSelected>>", on_preset)
+
+        ttk.Label(win, text="注:DeepSeek/通义/GLM/Moonshot/MiniMax 都走 OpenAI 兼容接口,只要 Key + URL + Model 对得上。",
+                  foreground="#666", padding=(8, 8, 0, 4), wraplength=520).pack(anchor="w")
 
         def save():
             yi_expert.save_config({
+                "provider": preset_var.get(),
                 "api_key": key_var.get().strip(),
                 "base_url": url_var.get().strip() or "https://api.deepseek.com/v1",
                 "model": model_var.get().strip() or "deepseek-chat",
