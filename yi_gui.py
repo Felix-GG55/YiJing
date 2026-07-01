@@ -719,10 +719,12 @@ class YiApp:
         cur_url   = (cfg.get("base_url", "") or "").strip() or "https://api.deepseek.com/v1"
         cur_model = (cfg.get("model",    "") or "").strip() or "deepseek-chat"
 
-        # URL 命中即选中 preset,model 字段强制覆盖为 preset 默认值(防 minimax-chat 之类错字段)
+        # v4.0.1: URL 命中即选中 preset,model 字段强制覆盖为 preset 默认值 (防 minimax-chat 之类错字段)
+        #          URL 比较 case-insensitive + 忽略尾部斜杠
         matched = "自定义(手动填 URL/Model)"
+        cur_url_norm = cur_url.rstrip("/").lower()
         for n, (u, m) in self.PRESETS.items():
-            if u and u == cur_url:
+            if u and u.rstrip("/").lower() == cur_url_norm:
                 matched = n
                 if cur_model != m:
                     cur_model = m

@@ -23,6 +23,17 @@ DEFAULT_CONFIG = {
     "model": "deepseek-chat",
 }
 
+# v4.0.1: 已知错误的 model 占位名 → 真实可用的 model 名
+# 用户在 v3.x 时手填的占位符(如 minimax-chat),会被自动纠正并回写磁盘
+MODEL_NAME_MIGRATION = {
+    "minimax-chat":      "MiniMax-Text-01",
+    "minimax":           "MiniMax-Text-01",
+    "MiniMax-chat":      "MiniMax-Text-01",
+    "MiniMax":           "MiniMax-Text-01",
+    "abab5.5-chat":      "MiniMax-Text-01",
+    "abab6.5s-chat":     "MiniMax-Text-01",
+}
+
 SYSTEM_PROMPT = """你是一位道行深厚的道士,精研《周易》数十年,通晓王弼注与朱熹《周易本义》,
 能以现代白话为求测者解卦。
 
@@ -52,6 +63,21 @@ SYSTEM_PROMPT = """你是一位道行深厚的道士,精研《周易》数十年
 
 
 def load_config():
+    merged = _load_config_raw()
+    # 纠正已知错误的 model 占位符
+    model = (merged.get("model") or "").strip()
+    new_model = MODEL_NAME_MIGRATION.get(model)
+    if new_model and new_model != model:
+        merged["model"] = new_model
+        # 回写磁盘,避免每次启动都纠正
+        try:
+            save_config(merged)
+        except Exception:
+            pass
+    return merged
+
+
+def _load_config_raw():
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
