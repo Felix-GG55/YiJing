@@ -89,7 +89,8 @@ def _hex_info(num):
     }
 
 
-def build_user_prompt(question, cast_result):
+def build_user_prompt(question, cast_result, extra=""):
+    """构造给 LLM 的 user prompt。extra 为可选附加引用。"""
     main = _hex_info(cast_result.get("main_num"))
     nuclear = _hex_info(cast_result.get("nuclear_num"))
     changed_num = cast_result.get("changed_num")
@@ -134,17 +135,28 @@ def build_user_prompt(question, cast_result):
         parts.append("动爻:无")
     parts.append("")
     parts.append("请据此解卦,以白话答之。")
+    if extra:
+        parts.append("")
+        parts.append("=" * 50)
+        parts.append("【附加引用】用户从典籍复制粘贴的权威经文/注疏,你必须以其为依据:")
+        parts.append(extra.strip())
+        parts.append("=" * 50)
     return "\n".join(parts)
 
 
 def ask_stream(question, cast_result, on_token, on_done, on_error):
-    """流式调用 LLM。所有回调都在工作线程,GUI 端需用 after() 切回主线程。"""
+    """向后兼容的 wrapper。"""
+    ask_stream_v4(question, cast_result, "", on_token, on_done, on_error, None)
+
+
+def ask_stream_v4(question, cast_result, extra, on_token, on_done, on_error, stop_event=None):
+    """v4:支持 extra 引用 + stop_event 中止。回调在工作线程。"""
     cfg = load_config()
     if not cfg.get("api_key"):
         on_error("未配置 API Key。请点 '设置 API'。")
         return
 
-    user_prompt = build_user_prompt(question, cast_result)
+    user_prompt = build_user_prompt(question, cast_result, extra)
     payload = {
         "model": cfg["model"],
         "messages": [
@@ -169,6 +181,9 @@ def ask_stream(question, cast_result, on_token, on_done, on_error):
                 req.add_header(k, v)
             with urllib.request.urlopen(req, timeout=180) as resp:
                 for raw_line in resp:
+                    if stop_event is not None and stop_event.is_set():
+                        on_error("用户停止")
+                        return
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
                         continue

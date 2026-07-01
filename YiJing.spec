@@ -10,6 +10,10 @@ from PyInstaller.utils.hooks import collect_all
 datas = []
 binaries = []
 hiddenimports = []
+
+# 自带典籍清单(JSON,131 本),运行时随 EXE 发布
+datas += [('yi_books_manifest.json', '.')]
+
 tmp_ret = collect_all('tkinter')
 datas += tmp_ret[0]
 binaries += tmp_ret[1]

@@ -1,567 +1,770 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-易经三钱法 - Tkinter GUI(Windows / macOS / Linux 通用)
-依赖:Python 3.7+ 标准库(tkinter)。
-启动:python yi_gui.py
+玄妙易经 v4.0  ─  单页界面 + 八卦元素 + 典籍引用 + AI 解卦
+===================================================
+  Item 1 美化:红黑金配色、太极图、八卦符
+            河图洛书装饰、卦象 Canvas 重绘
+  Item 2 优化:起卦→解读→问道士一体流,无 Tab 切换
+  Item 3 集成:131 本周易/老子/参同契 典籍索引,
+            附加引用框可直接贴入 AI prompt
+  Item 4 AI 报错:v3.4 已修复(URL 匹配强制覆盖 model)
 """
+import os
 import sys
+import json
+import math
+import datetime
+import threading
+import subprocess
+import webbrowser
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import yi_core as core
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+
+try:
+    import yi_core as core
+except ImportError:
+    core = None
+
 import yi_expert
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+# ============================================================
+# 配色
+# ============================================================
+THEME = {
+    "bg":       "#F5E9D0",
+    "panel":    "#FDF6E3",
+    "ink":      "#1A1A1A",
+    "accent":   "#B22222",
+    "gold":     "#B8860B",
+    "gold_lt":  "#D4AF37",
+    "line_old": "#C8102E",
+    "yang":     "#1A1A1A",
+    "yin":      "#3D2817",
+    "muted":    "#6B5B4F",
+    "trigram_bg": "#FFF8E7",
+}
 
+# ============================================================
+# 八卦符号
+# ============================================================
+TRIGRAM_SYM = {
+    "乾": "☰", "兑": "☱", "离": "☲", "震": "☳",
+    "巽": "☴", "坎": "☵", "艮": "☶", "坤": "☷",
+}
+TRIGRAM_WUXING = {
+    "乾": "金", "兑": "金", "离": "火", "震": "木",
+    "巽": "木", "坎": "水", "艮": "土", "坤": "土",
+}
+TRIGRAM_DEITY = {
+    "乾": "天", "兑": "泽", "离": "火", "震": "雷",
+    "巽": "风", "坎": "水", "艮": "山", "坤": "地",
+}
+
+# ============================================================
+# 资源路径(支持 PyInstaller frozen)
+# ============================================================
+def _bundle_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+def _user_dir():
+    return Path.home() / "Documents" / "qi"
+
+
+def load_books_manifest():
+    """读取打包的典籍清单。"""
+    p = _bundle_dir() / "yi_books_manifest.json"
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"categories": {}}
+
+
+def open_path(path):
+    """用系统默认程序打开文件/URL。"""
+    if not path:
+        return False
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return True
+    except Exception:
+        try:
+            webbrowser.open(Path(path).as_uri() if Path(path).exists() else path)
+            return True
+        except Exception:
+            return False
+
+
+# ============================================================
+# 卦象绘制
+# ============================================================
+def draw_hex_canvas(canvas, binary, lines=None, moving_idx=None):
+    """在 canvas 上画 6 根爻(从下到上)。binary='111111' 表全阳。"""
+    canvas.delete("all")
+    w = int(canvas["width"])
+    h = int(canvas["height"])
+    pad_x = 18
+    pad_y = 8
+    line_w = w - 2 * pad_x
+    line_thick = 6
+    gap = (h - 2 * pad_y) // 6
+    moving_idx = set(moving_idx or [])
+    lines = lines or [None] * 6
+    # binary 字符串按从下到上:binary[0]=初爻, binary[5]=上爻
+    for i in range(6):
+        y_center = h - pad_y - i * gap - gap // 2
+        kind = binary[i] if i < len(binary) else "1"
+        is_old = (i + 1) in moving_idx  # i+1 = 爻位 1..6
+        # 阳爻 solid,阴爻 broken
+        if kind == "1":
+            # 阳爻
+            x0 = pad_x
+            x1 = pad_x + line_w
+            canvas.create_rectangle(
+                x0, y_center - line_thick // 2,
+                x1, y_center + line_thick // 2,
+                fill=THEME["line_old"] if is_old else THEME["yang"],
+                outline="",
+            )
+        else:
+            # 阴爻 broken: 两段
+            seg = line_w // 2 - 4
+            y0 = y_center - line_thick // 2
+            y1 = y_center + line_thick // 2
+            color = THEME["line_old"] if is_old else THEME["yin"]
+            canvas.create_rectangle(pad_x, y0, pad_x + seg, y1, fill=color, outline="")
+            canvas.create_rectangle(pad_x + seg + 8, y0, pad_x + 2 * seg + 8, y1, fill=color, outline="")
+        # 老爻上盖 O/X
+        if is_old:
+            color = THEME["line_old"]
+            if kind == "1":
+                # 老阳 ─O─
+                r = 7
+                canvas.create_oval(
+                    pad_x + line_w // 2 - r, y_center - r,
+                    pad_x + line_w // 2 + r, y_center + r,
+                    fill=THEME["bg"], outline=color, width=2,
+                )
+                canvas.create_text(
+                    pad_x + line_w // 2, y_center,
+                    text="O", fill=color, font=("Noto Sans CJK SC", 8, "bold"),
+                )
+            else:
+                # 老阴 ─X─
+                canvas.create_line(
+                    pad_x + line_w // 2 - 5, y_center - 5,
+                    pad_x + line_w // 2 + 5, y_center + 5,
+                    fill=color, width=2,
+                )
+                canvas.create_line(
+                    pad_x + line_w // 2 - 5, y_center + 5,
+                    pad_x + line_w // 2 + 5, y_center - 5,
+                    fill=color, width=2,
+                )
+# ============================================================
+# 主类
+# ============================================================
 
 class YiApp:
+    """玄妙易经 v4.0 单页应用。"""
+
+    LOG_DIR = Path.home() / "Documents" / "qi" / "logs"
+
     def __init__(self, root):
         self.root = root
-        root.title("易经三钱法")
-        root.geometry("980x720")
+        self._setup_root()
+        self._setup_styles()
+
+        # 数据
+        self.books = load_books_manifest()
+        self.current_cast = None
+        self.last_question = ""
+
+        # UI 控件缓存(供后续刷新)
+        self.hex_canvases = {}   # {"main": canvas, ...}
+        self.hex_titles   = {}   # 卦名
+        self.hex_meta     = {}   # 上下卦符
+        self.txt_guaci    = None
+        self.txt_lines    = None
+        self.txt_extra    = None
+        self.txt_expert   = None
+        self.status_var   = tk.StringVar(value="就绪")
+        self.expert_status_var = tk.StringVar(value="")
+        self.summary_var  = tk.StringVar(value="尚未起卦")
+
+        self._build_header()
+        self._build_cast_row()
+        self._build_hex_panels()
+        self._build_interpretation()
+        self._build_expert_panel()
+        self._build_books_panel()
+        self._build_status_bar()
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._update_books_tree()
+
+    # ----------------------------------------------------------------
+    # 基础设置
+    # ----------------------------------------------------------------
+    def _setup_root(self):
+        self.root.title("玄妙易经  v4.0")
+        self.root.geometry("1280x780")
+        self.root.minsize(1100, 700)
+        self.root.configure(bg=THEME["bg"])
+
+    def _setup_styles(self):
+        s = ttk.Style()
         try:
-            root.tk.call("tk", "scaling", 1.2)
+            s.theme_use("clam")
         except Exception:
             pass
 
-        self._build_menu()
-        self._build_tabs()
+        # 全局配色
+        s.configure(".",            background=THEME["bg"], foreground=THEME["ink"])
+        s.configure("TFrame",       background=THEME["bg"])
+        s.configure("Panel.TFrame", background=THEME["panel"], relief="flat")
+        s.configure("Card.TFrame",  background=THEME["panel"], relief="solid", borderwidth=1)
+        s.configure("TLabel",       background=THEME["bg"],    foreground=THEME["ink"],   font=("Noto Serif CJK SC", 11))
+        s.configure("Panel.TLabel", background=THEME["panel"], foreground=THEME["ink"],   font=("Noto Serif CJK SC", 11))
+        s.configure("Muted.TLabel", background=THEME["panel"], foreground=THEME["muted"], font=("Noto Serif CJK SC", 10))
+        s.configure("Title.TLabel", background=THEME["bg"],    foreground=THEME["accent"], font=("Noto Serif CJK SC", 22, "bold"))
+        s.configure("Sub.TLabel",   background=THEME["bg"],    foreground=THEME["muted"], font=("Noto Serif CJK SC", 11))
+        s.configure("HexName.TLabel", background=THEME["panel"], foreground=THEME["accent"], font=("Noto Serif CJK SC", 14, "bold"))
+        s.configure("HexMeta.TLabel", background=THEME["panel"], foreground=THEME["ink"], font=("Noto Sans CJK SC", 10))
+        s.configure("HexRole.TLabel", background=THEME["panel"], foreground=THEME["gold"], font=("Noto Serif CJK SC", 11, "bold"))
+        s.configure("Status.TLabel", background=THEME["gold"],  foreground=THEME["ink"], font=("Noto Serif CJK SC", 10))
+        s.configure("TButton",      background=THEME["panel"], foreground=THEME["ink"], font=("Noto Serif CJK SC", 10), padding=(8, 4))
+        s.map("TButton",  background=[("active", THEME["gold_lt"])])
+        s.configure("Accent.TButton", background=THEME["accent"], foreground="#FFFFFF", font=("Noto Serif CJK SC", 11, "bold"), padding=(10, 5))
+        s.map("Accent.TButton", background=[("active", "#8B1A1A")])
+        s.configure("Gold.TButton",   background=THEME["gold"],   foreground=THEME["ink"],   font=("Noto Serif CJK SC", 10, "bold"), padding=(10, 4))
+        s.map("Gold.TButton", background=[("active", THEME["gold_lt"])])
+        s.configure("TEntry",      fieldbackground="#FFFFFF", foreground=THEME["ink"], font=("Noto Serif CJK SC", 11))
+        s.configure("TNotebook",   background=THEME["bg"],    borderwidth=0)
+        s.configure("TNotebook.Tab", background=THEME["panel"], foreground=THEME["ink"], padding=(10, 4), font=("Noto Serif CJK SC", 10))
+        s.map("TNotebook.Tab", background=[("selected", THEME["accent"])], foreground=[("selected", "#FFFFFF")])
+        s.configure("Treeview",    background="#FFFFFF", fieldbackground="#FFFFFF", foreground=THEME["ink"], font=("Noto Sans CJK SC", 10), rowheight=22)
+        s.configure("Treeview.Heading", background=THEME["panel"], foreground=THEME["ink"], font=("Noto Serif CJK SC", 10, "bold"))
 
-        self.last_cast = None
-        self.expert_full = ''
-        self.expert_busy = False
+    # ----------------------------------------------------------------
+    # Header — 标题 + 太极图 + 副标
+    # ----------------------------------------------------------------
+    def _build_header(self):
+        head = ttk.Frame(self.root, style="TFrame", padding=(16, 8, 16, 4))
+        head.pack(side="top", fill="x")
 
-    # ---------- 菜单 ----------
-    def _build_menu(self):
-        menubar = tk.Menu(self.root)
-        filem = tk.Menu(menubar, tearoff=0)
-        filem.add_command(label="起卦  Ctrl+N", command=lambda: self.notebook.select(0))
-        filem.add_command(label="查看 64 卦  Ctrl+B", command=lambda: self.notebook.select(1))
-        filem.add_command(label="查看日志  Ctrl+L", command=lambda: self.notebook.select(2))
-        filem.add_command(label="AI 解卦  Ctrl+E", command=lambda: self.notebook.select(3))
-        filem.add_separator()
-        filem.add_command(label="退出  Ctrl+Q", command=self.root.quit)
-        menubar.add_cascade(label="文件", menu=filem)
+        # 左:太极图(canvas 绘)
+        tjc = tk.Canvas(head, width=46, height=46, bg=THEME["bg"], highlightthickness=0)
+        tjc.pack(side="left", padx=(0, 10))
+        self._draw_taiji(tjc, 23, 23, 20)
 
-        helpm = tk.Menu(menubar, tearoff=0)
-        helpm.add_command(label="三钱法说明", command=self._show_help)
-        helpm.add_command(label="关于", command=self._show_about)
-        menubar.add_cascade(label="帮助", menu=helpm)
-        self.root.config(menu=menubar)
+        # 中:标题 + 副标
+        mid = ttk.Frame(head)
+        mid.pack(side="left", fill="x", expand=True)
+        ttk.Label(mid, text="玄妙易经", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(mid, text="道生一,一生二,二生三,三生万物。万物负阴而抱阳,冲气以为和。",
+                  style="Sub.TLabel").pack(anchor="w")
 
-        self.root.bind("<Control-n>", lambda e: self.notebook.select(0))
-        self.root.bind("<Control-b>", lambda e: self.notebook.select(1))
-        self.root.bind("<Control-l>", lambda e: self.notebook.select(2))
-        self.root.bind("<Control-e>", lambda e: self.notebook.select(3))
-        self.root.bind("<Control-q>", lambda e: self.root.quit())
+        # 右:版本 + API 设置
+        right = ttk.Frame(head)
+        right.pack(side="right")
+        ttk.Button(right, text="设置 API", style="Gold.TButton",
+                   command=self._show_expert_config).pack(side="right", padx=4)
+        ttk.Label(right, text="v4.0", style="Sub.TLabel").pack(side="right", padx=6)
 
-    # ---------- 标签页 ----------
-    def _build_tabs(self):
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
+        # 分隔金线
+        sep = tk.Frame(self.root, height=2, bg=THEME["gold"])
+        sep.pack(side="top", fill="x", padx=16)
 
-        self.tab_cast = ttk.Frame(self.notebook)
-        self.tab_browse = ttk.Frame(self.notebook)
-        self.tab_log = ttk.Frame(self.notebook)
-        self.tab_expert = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_cast, text="  起 卦  ")
-        self.notebook.add(self.tab_browse, text="  64 卦  ")
-        self.notebook.add(self.tab_log, text="  日 志  ")
-        self.notebook.add(self.tab_expert, text="  AI解卦  ")
+    def _draw_taiji(self, canvas, cx, cy, r):
+        """画一个太极图。"""
+        # 外圈
+        canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline=THEME["ink"], width=2, fill=THEME["bg"])
+        # 左半阴(黑)
+        canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                          start=90, extent=180, fill=THEME["ink"], outline="")
+        # 右半阳(留白)
+        # 上下两个小圆,头尾是对方颜色
+        sr = r // 2
+        canvas.create_oval(cx - sr, cy - r, cx + sr, cy,
+                           fill=THEME["ink"], outline="")
+        canvas.create_oval(cx - sr, cy, cx + sr, cy + r,
+                           fill=THEME["bg"], outline=THEME["ink"], width=1)
+        # 阴阳鱼眼
+        er = r // 8
+        canvas.create_oval(cx - er, cy - sr // 2 - er, cx + er, cy - sr // 2 + er,
+                           fill=THEME["bg"], outline=THEME["ink"], width=1)
+        canvas.create_oval(cx - er, cy + sr // 2 - er, cx + er, cy + sr // 2 + er,
+                           fill=THEME["ink"], outline="")
 
-        self._build_cast_tab()
-        self._build_browse_tab()
-        self._build_log_tab()
-        self._build_expert_tab()
+    # ----------------------------------------------------------------
+    # 起卦行
+    # ----------------------------------------------------------------
+    def _build_cast_row(self):
+        row = ttk.Frame(self.root, style="TFrame", padding=(16, 8))
+        row.pack(side="top", fill="x")
+        ttk.Label(row, text="问事:", style="TLabel").pack(side="left")
+        self.question_var = tk.StringVar()
+        ent = ttk.Entry(row, textvariable=self.question_var, font=("Noto Serif CJK SC", 12))
+        ent.pack(side="left", fill="x", expand=True, padx=8)
+        ent.bind("<Return>", lambda _e: self._do_cast())
+        ttk.Button(row, text="起 卦", style="Accent.TButton",
+                   command=self._do_cast).pack(side="left", padx=2)
+        ttk.Button(row, text="清 空", command=self._clear_cast).pack(side="left", padx=2)
+    # ----------------------------------------------------------------
+    # 三卦面板:本卦 / 互卦 / 变卦
+    # ----------------------------------------------------------------
+    def _build_hex_panels(self):
+        wrap = ttk.Frame(self.root, style="TFrame", padding=(16, 4))
+        wrap.pack(side="top", fill="x")
+        wrap.columnconfigure(0, weight=1)
+        wrap.columnconfigure(1, weight=1)
+        wrap.columnconfigure(2, weight=1)
 
-    # ---------- 起卦 ----------
-    def _build_cast_tab(self):
-        top = ttk.Frame(self.tab_cast)
-        top.pack(fill="x", padx=8, pady=8)
-        ttk.Label(top, text="问事:").pack(side="left")
-        self.q_var = tk.StringVar()
-        ent = ttk.Entry(top, textvariable=self.q_var, width=50)
-        ent.pack(side="left", padx=6)
-        ent.bind("<Return>", lambda e: self._do_cast())
-        ttk.Button(top, text="起 卦", command=self._do_cast).pack(side="left", padx=4)
-        ttk.Button(top, text="清 空", command=self._clear_cast).pack(side="left", padx=4)
+        for col, role in enumerate(["本卦(当前)", "互卦(内在)", "变卦(趋向)"]):
+            card = ttk.Frame(wrap, style="Card.TFrame", padding=8)
+            card.grid(row=0, column=col, sticky="nsew", padx=4)
+            # role 标题
+            role_key = {"本卦(当前)": "main", "互卦(内在)": "nuclear", "变卦(趋向)": "changed"}[role]
+            ttk.Label(card, text=role, style="HexRole.TLabel").pack(anchor="w")
+            # canvas
+            cv = tk.Canvas(card, width=180, height=180, bg=THEME["trigram_bg"],
+                           highlightthickness=1, highlightbackground=THEME["gold"])
+            cv.pack(pady=6)
+            self.hex_canvases[role_key] = cv
+            # 卦名 + 序号
+            self.hex_titles[role_key] = ttk.Label(card, text="—", style="HexName.TLabel")
+            self.hex_titles[role_key].pack()
+            # 上下卦符
+            self.hex_meta[role_key] = ttk.Label(card, text="", style="HexMeta.TLabel")
+            self.hex_meta[role_key].pack()
 
-        body = ttk.Frame(self.tab_cast)
-        body.pack(fill="both", expand=True, padx=8, pady=4)
-
-        # 左侧:画三个卦象
-        left = ttk.Frame(body)
-        left.pack(side="left", fill="y", padx=(0, 8))
-
-        self.canvas_main = self._make_hex_canvas(left, "主卦")
-        self.canvas_nuclear = self._make_hex_canvas(left, "互卦")
-        self.canvas_changed = self._make_hex_canvas(left, "变卦")
-
-        # 右侧:文本信息
-        right = ttk.Frame(body)
-        right.pack(side="left", fill="both", expand=True)
-        self.cast_text = scrolledtext.ScrolledText(right, wrap="char", width=50, font=("Menlo", 11))
-        self.cast_text.pack(fill="both", expand=True)
-
-    def _make_hex_canvas(self, parent, title):
-        f = ttk.LabelFrame(parent, text=title, padding=4)
-        f.pack(fill="x", pady=4)
-        c = tk.Canvas(f, width=160, height=140, bg="white", highlightthickness=1, highlightbackground="#888")
-        c.pack()
-        return c
-
-    def _draw_hex(self, canvas, lines, title):
-        canvas.delete("all")
-        if not lines:
-            canvas.create_text(80, 70, text="(无)", fill="#888", font=("Menlo", 11))
+    def _render_hex(self, key, hex_obj, moving=None):
+        """刷新某个卦的 canvas + 标签。"""
+        cv = self.hex_canvases[key]
+        if not hex_obj:
+            cv.delete("all")
+            self.hex_titles[key].config(text="—")
+            self.hex_meta[key].config(text="")
             return
-        w = int(canvas["width"])
-        h = int(canvas["height"])
-        margin_x = 20
-        line_w = w - 2 * margin_x
-        line_h = 4
-        gap = (h - 12) / 6
-        for idx, ln in enumerate(lines):
-            _, v, lbl = ln
-            y = 8 + idx * gap
-            x0, x1 = margin_x, margin_x + line_w
-            if v == 1:
-                # yang 阳
-                canvas.create_rectangle(x0, y, x1, y + line_h, fill="black", outline="black")
-            else:
-                # yin 阴(中间断)
-                seg = (line_w - 12) // 2
-                canvas.create_rectangle(x0, y, x0 + seg, y + line_h, fill="black", outline="black")
-                canvas.create_rectangle(x1 - seg, y, x1, y + line_h, fill="black", outline="black")
-            if lbl in ("老阳", "老阴"):
-                canvas.create_oval(w - 14, y - 6, w - 4, y + 10, outline="red", width=2)
-                canvas.create_text(w - 9, y + 2, text="动", fill="red", font=("Menlo", 8))
+        draw_hex_canvas(cv, hex_obj["binary"], moving_idx=moving or [])
+        n = hex_obj["num"]
+        name = hex_obj["name"]
+        sym_u = TRIGRAM_SYM.get(hex_obj["upper"], "?")
+        sym_l = TRIGRAM_SYM.get(hex_obj["lower"], "?")
+        wu_u = TRIGRAM_WUXING.get(hex_obj["upper"], "")
+        wu_l = TRIGRAM_WUXING.get(hex_obj["lower"], "")
+        self.hex_titles[key].config(text=f"第{n}卦 {name}")
+        self.hex_meta[key].config(
+            text=f"{sym_u}{wu_u}上 · {sym_l}{wu_l}下"
+        )
 
+    # ----------------------------------------------------------------
+    # 解读区:卦辞 / 象传 / 动爻 + 爻辞
+    # ----------------------------------------------------------------
+    def _build_interpretation(self):
+        wrap = ttk.LabelFrame(self.root, text="卦辞 · 象传 · 爻辞", padding=10)
+        wrap.pack(side="top", fill="x", padx=16, pady=6)
+        wrap.columnconfigure(0, weight=1)
+        wrap.columnconfigure(1, weight=1)
+
+        # 左:卦辞 + 象传
+        left = ttk.Frame(wrap)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        ttk.Label(left, text="卦辞 · 象传", style="HexRole.TLabel").pack(anchor="w")
+        self.txt_guaci = scrolledtext.ScrolledText(left, height=4, font=("Noto Serif CJK SC", 11),
+                                                    wrap="word", bg="#FFFFFF", relief="solid", borderwidth=1)
+        self.txt_guaci.pack(fill="x", pady=2)
+        self.txt_guaci.insert("end", "(尚未起卦)")
+        self.txt_guaci.configure(state="disabled")
+
+        # 右:动爻 + 爻辞
+        right = ttk.Frame(wrap)
+        right.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(right, text="动爻 · 爻辞", style="HexRole.TLabel").pack(anchor="w")
+        self.txt_lines = scrolledtext.ScrolledText(right, height=4, font=("Noto Serif CJK SC", 11),
+                                                    wrap="word", bg="#FFFFFF", relief="solid", borderwidth=1)
+        self.txt_lines.pack(fill="x", pady=2)
+        self.txt_lines.insert("end", "(尚未起卦)")
+        self.txt_lines.configure(state="disabled")
+
+    # ----------------------------------------------------------------
+    # AI 道士区:附加引用 + 流式输出
+    # ----------------------------------------------------------------
+    def _build_expert_panel(self):
+        wrap = ttk.LabelFrame(self.root, text="问  道  士  ─  AI 解卦", padding=10)
+        wrap.pack(side="top", fill="both", expand=True, padx=16, pady=6)
+
+        # 附加引用行
+        ref_row = ttk.Frame(wrap)
+        ref_row.pack(side="top", fill="x")
+        ttk.Label(ref_row, text="附加引用(从右侧典籍复制粘贴经文,会作为权威依据注入 AI prompt):",
+                  style="Muted.TLabel").pack(anchor="w")
+        self.txt_extra = tk.Text(ref_row, height=3, font=("Noto Serif CJK SC", 11),
+                                  wrap="word", bg="#FFF8E7", relief="solid", borderwidth=1,
+                                  foreground=THEME["ink"])
+        self.txt_extra.pack(fill="x", pady=2)
+
+        # 按钮行
+        btn_row = ttk.Frame(wrap)
+        btn_row.pack(side="top", fill="x", pady=6)
+        self.btn_ask = ttk.Button(btn_row, text="请道士解卦", style="Accent.TButton",
+                                   command=self._ask_expert)
+        self.btn_ask.pack(side="left")
+        self.btn_stop = ttk.Button(btn_row, text="停止", command=self._stop_expert,
+                                   state="disabled")
+        self.btn_stop.pack(side="left", padx=4)
+        ttk.Button(btn_row, text="保存到日志", command=self._save_log,
+                   style="Gold.TButton").pack(side="left", padx=4)
+        ttk.Label(btn_row, textvariable=self.expert_status_var,
+                  style="Muted.TLabel").pack(side="left", padx=10)
+
+        # 输出区
+        out_frame = ttk.Frame(wrap)
+        out_frame.pack(side="top", fill="both", expand=True)
+        self.txt_expert = scrolledtext.ScrolledText(out_frame, height=10, font=("Noto Serif CJK SC", 11),
+                                                     wrap="word", bg="#FFFFFF", relief="solid", borderwidth=1,
+                                                     foreground=THEME["ink"])
+        self.txt_expert.pack(fill="both", expand=True)
+        self.txt_expert.configure(state="disabled")
+        # 流式 token 累积
+        self._stream_buf = []
+
+    # ----------------------------------------------------------------
+    # 典籍侧栏
+    # ----------------------------------------------------------------
+    def _build_books_panel(self):
+        wrap = ttk.LabelFrame(self.root, text="典  籍  ─  131 本", padding=6)
+        wrap.pack(side="right", fill="y", padx=(0, 16), pady=(0, 16), ipadx=4)
+        wrap.configure(width=280)
+        # 分类 notebook
+        nb = ttk.Notebook(wrap)
+        nb.pack(fill="both", expand=True)
+        self.books_nb = nb
+        self.books_trees = {}
+
+    def _update_books_tree(self):
+        """用 self.books 数据填充典籍侧栏。"""
+        cats = self.books.get("categories", {})
+        for cat, books in cats.items():
+            if cat in self.books_trees:
+                continue
+            f = ttk.Frame(self.books_nb)
+            self.books_nb.add(f, text=f"{cat}({len(books)})")
+            tree = ttk.Treeview(f, columns=("size",), show="tree headings", height=22)
+            tree.heading("#0", text="书名")
+            tree.heading("size", text="大小")
+            tree.column("#0", width=180, anchor="w")
+            tree.column("size", width=70, anchor="e")
+            for b in books:
+                size_kb = b["size"] // 1024
+                if size_kb > 1024:
+                    size_txt = f"{size_kb/1024:.1f}MB"
+                else:
+                    size_txt = f"{size_kb}KB"
+                tree.insert("", "end", iid=f"{cat}::{b['name']}", text=b["name"][:40], values=(size_txt,))
+            tree.pack(fill="both", expand=True)
+            tree.bind("<Double-1>", self._on_book_double_click)
+            self.books_trees[cat] = tree
+        # 空时给个提示
+        if not cats:
+            ttk.Label(wrap, text="(未发现典籍清单)", style="Muted.TLabel").pack()
+
+    def _on_book_double_click(self, _evt=None):
+        tree = self.books_nb.focus_get()
+        if not isinstance(tree, ttk.Treeview):
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if "::" not in iid:
+            return
+        cat, name = iid.split("::", 1)
+        # 在 manifest 里找 path
+        for b in self.books.get("categories", {}).get(cat, []):
+            if b["name"] == name:
+                ok = open_path(b["path"])
+                self.status_var.set(f"打开 {name}... {'OK' if ok else '失败'}")
+                return
+
+    # ----------------------------------------------------------------
+    # 状态栏
+    # ----------------------------------------------------------------
+    def _build_status_bar(self):
+        bar = tk.Frame(self.root, height=22, bg=THEME["gold"])
+        bar.pack(side="bottom", fill="x")
+        ttk.Label(bar, textvariable=self.status_var, style="Status.TLabel").pack(side="left", padx=8)
+        ttk.Label(bar, textvariable=self.summary_var, style="Status.TLabel").pack(side="right", padx=8)
+    # ----------------------------------------------------------------
+    # 起卦 / 解读 / AI 解卦
+    # ----------------------------------------------------------------
     def _do_cast(self):
-        q = self.q_var.get().strip()
-        lines = core.cast_six_lines()
-        main_bin = core.lines_to_binary(lines)
-        main = core.binary_to_hex(main_bin)
-        nuclear_bin = core.nuclear_hex(lines)
-        nuclear = core.binary_to_hex(nuclear_bin)
-        changed_bin = core.changed_binary(lines)
-        changed = core.binary_to_hex(changed_bin)
-        any_change = any(l[2] in ("老阴", "老阳") for l in lines)
+        if core is None:
+            messagebox.showerror("错误", "yi_core 未加载")
+            return
+        question = self.question_var.get().strip()
+        self.last_question = question
+        # 调 core.cast(自动三钱法 + 计算本/互/变)
+        try:
+            import time as _t
+            cast = core.cast(question, seed=int(_t.time()))
+        except TypeError:
+            cast = core.cast(question)
+        self.current_cast = cast
+        lines = cast["lines"]
 
-        # 主卦画法:用真实爻
-        self._draw_hex(self.canvas_main, lines, "主卦")
+        # HEX tuple -> dict 包装(供 _render_hex 用)
+        def _to_dict(h):
+            if not h: return None
+            return {"num": h[0], "name": h[1], "upper": h[2], "lower": h[3],
+                    "binary": h[4], "guaci": h[5], "xiangzhuan": h[6], "lines": h[7]}
+        main    = _to_dict(core.HEX_BY_NUM.get(cast["main_num"]))
+        nuclear = _to_dict(core.HEX_BY_NUM.get(cast["nuclear_num"]))
+        changed = _to_dict(core.HEX_BY_NUM.get(cast["changed_num"])) if cast.get("changed_num") else None
 
-        # 互卦:从 lines 抽出 2,3,4 / 3,4,5 爻
-        nuc_vals = [core.line_to_yinyang(l) for l in lines]
-        nuc_lines = [(0, nuc_vals[5 - i], "互卦") for i in range(6)]
-        # 互卦的 binary 顺序是 自下而上 = vals[2],vals[3],vals[4] (下卦 3,4,5) + vals[1],vals[2],vals[3] (上卦 2,3,4)
-        # 索引 i=0 对应最下爻 = nuc_vals[2], i=5 对应最上爻 = nuc_vals[1]
-        nuc_lines = [(0, nuc_vals[5 - i], "互卦") for i in range(6)]
-        # 重新排列:nuc_lines[0] 是下卦最下爻 = nuc_vals[2] (即原卦第 3 爻)
-        nuc_lines = [(0, nuc_vals[5 - i], "互卦") for i in range(6)]
-        # 直接用 nuc_vals 重排:互卦六爻自下而上 = [nuc_vals[2], nuc_vals[3], nuc_vals[4], nuc_vals[1], nuc_vals[2], nuc_vals[3]]
-        nuc_yy = [nuc_vals[2], nuc_vals[3], nuc_vals[4], nuc_vals[1], nuc_vals[2], nuc_vals[3]]
-        nuc_lines = [(0, nuc_yy[5 - i], "互卦") for i in range(6)]
-        self._draw_hex(self.canvas_nuclear, nuc_lines, "互卦")
+        moving = [i for i, l in enumerate(lines, 1) if l[2] in ("老阴", "老阳")]
 
-        # 变卦
-        chg_yy = [core.line_to_yinyang(l) for l in lines]
-        chg_lines = []
-        for i in range(6):
-            lbl = "变爻" if lines[i][2] in ("老阴", "老阳") else "变卦"
-            chg_lines.append((0, chg_yy[5 - i], lbl))
-        self._draw_hex(self.canvas_changed, chg_lines if any_change else [], "变卦")
+        self._render_hex("main",    main,    moving if main else [])
+        self._render_hex("nuclear", nuclear, [])
+        self._render_hex("changed", changed, [])
 
-        # 文本信息
-        from datetime import datetime
-        text = []
-        text.append(f"起卦:{datetime.now():%Y-%m-%d %H:%M:%S}")
-        text.append(f"所问:{q or '(无)'}")
-        text.append("")
-        text.append(f"主卦 #{main[0]} {main[1]} {main[4]}  ({main[2]}上 {main[3]}下)")
-        text.append(f"  卦辞:{main[5]}")
-        text.append(f"  象传:{main[6]}")
-        text.append("  爻辞:")
-        for ln in main[7]:
-            text.append(f"    {ln}")
-        text.append("")
-        text.append(f"互卦 #{nuclear[0]} {nuclear[1]} {nuclear_bin}")
-        text.append(f"  卦辞:{nuclear[5]}")
-        text.append(f"  象传:{nuclear[6]}")
-        if any_change:
-            text.append("")
-            text.append(f"变卦 #{changed[0]} {changed[1]} {changed_bin}")
-            text.append(f"  卦辞:{changed[5]}")
-            text.append(f"  象传:{changed[6]}")
-        else:
-            text.append("")
-            text.append("(无动爻)")
+        # 卦辞 / 象传
+        guaci_lines = []
+        if main:
+            guaci_lines.append(f"【卦辞】{main['guaci']}")
+            guaci_lines.append(f"【象传】{main['xiangzhuan']}")
+        self._set_text(self.txt_guaci, "\n".join(guaci_lines) or "(无)")
 
-        self.cast_text.delete("1.0", "end")
-        self.cast_text.insert("1.0", "\n".join(text))
+        # 爻辞(主卦)
+        line_lines = []
+        if main:
+            for idx, ltxt in enumerate(main["lines"], 1):
+                marker = "★" if idx in moving else "·"
+                line_lines.append(f" {marker} {ltxt}")
+        if not moving:
+            line_lines.append("【注】本卦无动爻,以主卦为终。")
+        self._set_text(self.txt_lines, "\n".join(line_lines) or "(无)")
 
-        result = {
-            "question": q,
-            "lines": [(l[0], l[1], l[2]) for l in lines],
-            "main_num": main[0],
-            "nuclear_num": nuclear[0],
-            "changed_num": changed[0] if any_change else None,
-        }
-        self.last_cast = result
-        core.append_log(result)
-        self._refresh_expert_context()
+        # 状态摘要
+        sig = []
+        if main:
+            sym_u = TRIGRAM_SYM.get(main["upper"], "?")
+            sym_l = TRIGRAM_SYM.get(main["lower"], "?")
+            sig.append(f"{main['name']} ({sym_u}{main['upper']}上 {sym_l}{main['lower']}下)")
+        self.summary_var.set("  ".join(sig))
+        self.status_var.set(f"起卦完成 · {datetime.datetime.now().strftime('%H:%M:%S')} · 动爻 {len(moving)} 个")
+
+        self._save_log()
+
+    def _set_text(self, widget, text):
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("end", text)
+        widget.configure(state="disabled")
 
     def _clear_cast(self):
-        self.q_var.set("")
-        for c in (self.canvas_main, self.canvas_nuclear, self.canvas_changed):
-            c.delete("all")
-        self.cast_text.delete("1.0", "end")
+        self.question_var.set("")
+        self.current_cast = None
+        self.summary_var.set("尚未起卦")
+        self.status_var.set("已清空")
+        for k in ("main", "nuclear", "changed"):
+            self._render_hex(k, None)
+        self._set_text(self.txt_guaci, "(尚未起卦)")
+        self._set_text(self.txt_lines, "(尚未起卦)")
+        self._set_text(self.txt_expert, "(空)")
+        self.txt_extra.delete("1.0", "end")
 
-    # ---------- 64 卦浏览 ----------
-    def _build_browse_tab(self):
-        top = ttk.Frame(self.tab_browse)
-        top.pack(fill="x", padx=8, pady=8)
-        ttk.Label(top, text="卦序:").pack(side="left")
-        self.hex_num = tk.StringVar(value="1")
-        spin = ttk.Spinbox(top, from_=1, to=64, textvariable=self.hex_num, width=6)
-        spin.pack(side="left", padx=4)
-        ttk.Button(top, text="查看", command=self._show_hex).pack(side="left", padx=4)
-        ttk.Label(top, text="  搜索:").pack(side="left")
-        self.search_var = tk.StringVar()
-        se = ttk.Entry(top, textvariable=self.search_var, width=30)
-        se.pack(side="left", padx=4)
-        se.bind("<Return>", lambda e: self._do_search())
-        ttk.Button(top, text="搜索", command=self._do_search).pack(side="left")
-
-        body = ttk.Frame(self.tab_browse)
-        body.pack(fill="both", expand=True, padx=8, pady=4)
-
-        self.listbox = tk.Listbox(body, width=20, font=("Menlo", 10))
-        self.listbox.pack(side="left", fill="y", padx=(0, 6))
-        self.listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
-        for h in core.HEX:
-            self.listbox.insert("end", f"#{h[0]:>2} {h[1]} ({h[2]}{h[3]})")
-
-        self.browse_text = scrolledtext.ScrolledText(body, wrap="char", font=("Menlo", 11))
-        self.browse_text.pack(side="left", fill="both", expand=True)
-
-        self._show_hex()
-
-    def _on_listbox_select(self, _evt=None):
-        sel = self.listbox.curselection()
-        if sel:
-            self.hex_num.set(str(sel[0] + 1))
-            self._show_hex()
-
-    def _show_hex(self):
-        try:
-            n = int(self.hex_num.get())
-        except ValueError:
-            return
-        if n < 1 or n > 64:
-            return
-        h = core.get_hex(n)
-        text = [f"#{h[0]} {h[1]}  上卦 {h[2]}  下卦 {h[3]}",
-                f"卦象(自下而上):{h[4]}",
-                "",
-                f"卦辞:{h[5]}",
-                f"象传:{h[6]}",
-                "",
-                "六爻辞:"]
-        for ln in h[7]:
-            text.append(f"  {ln}")
-        self.browse_text.delete("1.0", "end")
-        self.browse_text.insert("1.0", "\n".join(text))
-
-    def _do_search(self):
-        kw = self.search_var.get().strip()
-        if not kw:
-            return
-        results = core.search_hex(kw)
-        if not results:
-            messagebox.showinfo("搜索", f"未找到包含 {kw} 的卦象")
-            return
-        self.browse_text.delete("1.0", "end")
-        out = [f"搜索 {kw} 共 {len(results)} 个结果:", ""]
-        for h in results:
-            out.append(f"#{h[0]} {h[1]} (上{h[2]} 下{h[3]}) - {h[5]}")
-            out.append("")
-        self.browse_text.insert("1.0", "\n".join(out))
-
-    # ---------- 日志 ----------
-    def _build_log_tab(self):
-        top = ttk.Frame(self.tab_log)
-        top.pack(fill="x", padx=8, pady=8)
-        ttk.Button(top, text="刷新", command=self._load_log).pack(side="left", padx=4)
-        ttk.Button(top, text="打开日志目录", command=self._open_log_dir).pack(side="left", padx=4)
-        ttk.Button(top, text="清空日志", command=self._clear_log).pack(side="left", padx=4)
-
-        self.log_text = scrolledtext.ScrolledText(self.tab_log, wrap="char", font=("Menlo", 10))
-        self.log_text.pack(fill="both", expand=True, padx=8, pady=4)
-        self._load_log()
-
-    def _load_log(self):
-        if core.LOG_FILE.exists():
-            self.log_text.delete("1.0", "end")
-            self.log_text.insert("1.0", core.LOG_FILE.read_text(encoding="utf-8"))
-        else:
-            self.log_text.delete("1.0", "end")
-            self.log_text.insert("1.0", "(尚无日志)")
-
-    def _open_log_dir(self):
-        import subprocess, platform
-        p = core.LOG_FILE.parent
-        p.mkdir(parents=True, exist_ok=True)
-        if platform.system() == "Darwin":
-            subprocess.Popen(["open", str(p)])
-        elif platform.system() == "Windows":
-            subprocess.Popen(["explorer", str(p)])
-        else:
-            subprocess.Popen(["xdg-open", str(p)])
-
-    def _clear_log(self):
-        if messagebox.askyesno("确认", "清空全部日志?"):
-            core.LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            core.LOG_FILE.write_text("# 易卦日志\n\n", encoding="utf-8")
-            self._load_log()
-
-    # ---------- 帮助 ----------
-    def _show_help(self):
-        msg = ("三钱法起卦\n\n"
-               "1. 心中默念所问之事\n"
-               "2. 取三枚铜钱(无字背则约定正面=3 反面=2)\n"
-               "3. 掷六次,每次记下:\n"
-               "   三个背(3+3+3=9)= 老阳(阳动变阴)\n"
-               "   两背一字(3+3+2=8)= 少阴\n"
-               "   一背二字(3+2+2=7)= 少阳\n"
-               "   三个字(2+2+2=6)= 老阴(阴动变阳)\n"
-               "4. 自下而上六爻成卦\n"
-               "5. 程序自动生成:主卦 / 互卦 / 变卦\n\n"
-               "互卦:取 2,3,4 爻为上,3,4,5 爻为下\n"
-               "变卦:动爻阴阳互换\n"
-               "无动爻则不变")
-        messagebox.showinfo("三钱法说明", msg)
-
-    def _show_about(self):
-        messagebox.showinfo("关于",
-            "易经三钱法 v1.0\n\n"
-            "依据:王弼注 / 朱熹 周易本义(宋,公版)\n"
-            "跨平台:Python 3.7+ / Tkinter\n"
-            f"日志:{core.LOG_FILE}")
-
-
-    # ---------- AI解卦 ----------
-    def _build_expert_tab(self):
-        top = ttk.Frame(self.tab_expert)
-        top.pack(fill="x", padx=8, pady=8)
-        self.expert_summary_var = tk.StringVar(value="(尚未起卦)")
-        ttk.Label(top, text="本卦:", font=("", 10, "bold")).pack(side="left")
-        ttk.Label(top, textvariable=self.expert_summary_var, foreground="#444").pack(side="left", padx=(4, 12))
-        ttk.Label(top, text="额外说明(可选):").pack(side="left")
-        self.expert_q_var = tk.StringVar()
-        ttk.Entry(top, textvariable=self.expert_q_var, width=30).pack(side="left", padx=4)
-
-        btns = ttk.Frame(self.tab_expert)
-        btns.pack(fill="x", padx=8, pady=(0, 6))
-        self.btn_ask = ttk.Button(btns, text="请道士解卦", command=self._ask_expert)
-        self.btn_ask.pack(side="left", padx=2)
-        ttk.Button(btns, text="设置 API", command=self._show_expert_config).pack(side="left", padx=2)
-        ttk.Button(btns, text="复制结果", command=self._copy_expert).pack(side="left", padx=2)
-        ttk.Button(btns, text="保存到日志", command=self._save_expert_to_log).pack(side="left", padx=2)
-        ttk.Button(btns, text="清空", command=self._clear_expert).pack(side="left", padx=2)
-
-        body = ttk.Frame(self.tab_expert)
-        body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self.expert_text = tk.Text(body, wrap="word", padx=8, pady=8)
-        self.expert_text.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(body, orient="vertical", command=self.expert_text.yview)
-        sb.pack(side="right", fill="y")
-        self.expert_text.config(yscrollcommand=sb.set, state="disabled")
-        self.expert_text.tag_configure("header", font=("Helvetica", 12, "bold"), foreground="#8B4513", spacing1=6, spacing3=2)
-        self.expert_text.tag_configure("meta", foreground="#666")
-        self.expert_text.tag_configure("err", foreground="#c00")
-
-    def _refresh_expert_context(self):
-        if not self.last_cast:
-            self.expert_summary_var.set("(尚未起卦)")
-            return
-        r = self.last_cast
-        main = core.HEX_BY_NUM.get(r["main_num"])
-        moving = [i for i, l in enumerate(r["lines"], 1) if l[2] in ("老阴", "老阳")]
-        s = f"#{main[0]} {main[1]}"
-        if moving:
-            s += f"  动爻:{','.join(map(str, moving))}爻"
-        else:
-            s += "  无动爻"
-        s += f"   问:{r['question'] or '(无)'}"
-        self.expert_summary_var.set(s)
-
-    def _append_expert(self, text, tag=None):
-        self.expert_text.config(state="normal")
-        if tag:
-            self.expert_text.insert("end", text, tag)
-        else:
-            self.expert_text.insert("end", text)
-        self.expert_text.see("end")
-        self.expert_text.config(state="disabled")
-
-    def _clear_expert(self):
-        self.expert_text.config(state="normal")
-        self.expert_text.delete("1.0", "end")
-        self.expert_text.config(state="disabled")
-        self.expert_full = ""
-
+    # ----------------------------------------------------------------
+    # AI 解卦(流式)
+    # ----------------------------------------------------------------
     def _ask_expert(self):
-        if self.expert_busy:
-            messagebox.showinfo("提示", "道士还在解卦,请稍候...")
-            return
-        if not self.last_cast:
-            messagebox.showwarning("提示", "请先在 '起卦' 标签起一卦。")
-            self.notebook.select(0)
+        if not self.current_cast:
+            messagebox.showinfo("提示", "请先起卦")
             return
         cfg = yi_expert.load_config()
         if not cfg.get("api_key"):
-            self._show_expert_config()
-            cfg = yi_expert.load_config()
-            if not cfg.get("api_key"):
-                return
-        self._clear_expert()
-        self._append_expert("道士正在解卦,请稍候...\n\n", "meta")
-        self.expert_busy = True
-        self.btn_ask.config(state="disabled", text="解卦中...")
-        extra = self.expert_q_var.get().strip()
-        q = self.last_cast["question"] or ""
-        if extra:
-            q = (q + " | " + extra) if q else extra
-        cast_result = self.last_cast
-        root = self.root
+            messagebox.showinfo("提示", "尚未配置 API Key,请先点右上角 '设置 API'")
+            return
+        # reset UI
+        self._set_text(self.txt_expert, "道士正在解卦,请稍候...\n\n")
+        self._stream_buf = []
+        self.btn_ask.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.expert_status_var.set("生成中…")
+        self._stop_event = threading.Event()
 
+        extra = self.txt_extra.get("1.0", "end").strip()
+        threading.Thread(
+            target=self._expert_worker,
+            args=(extra,),
+            daemon=True,
+        ).start()
+
+    def _stop_expert(self):
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+        self.expert_status_var.set("已停止")
+        self.btn_ask.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+
+    def _expert_worker(self, extra):
         def on_token(tok):
-            root.after(0, lambda: self._append_expert(tok))
+            self._stream_buf.append(tok)
+            # 用 after 切回主线程
+            self.root.after(0, self._append_expert_text, tok)
+        def on_done(_full):
+            self.root.after(0, self._on_expert_done)
+        def on_error(msg):
+            self.root.after(0, self._on_expert_error, msg)
 
-        def on_done(full):
-            def _():
-                self.expert_full = full
-                self.expert_busy = False
-                self.btn_ask.config(state="normal", text="请道士解卦")
-                self._highlight_headers()
-            root.after(0, _)
+        cast = self.current_cast
+        # 在 worker 里把 extra 注入 — 通过闭包变量传
+        yi_expert.ask_stream_v4(
+            self.last_question, cast, extra,
+            on_token=on_token, on_done=on_done, on_error=on_error,
+            stop_event=self._stop_event,
+        )
 
-        def on_error(err):
-            def _():
-                self._append_expert("\n\n[出错] " + err + "\n", "err")
-                self.expert_busy = False
-                self.btn_ask.config(state="normal", text="请道士解卦")
-            root.after(0, _)
+    def _append_expert_text(self, tok):
+        self.txt_expert.configure(state="normal")
+        self.txt_expert.insert("end", tok)
+        self.txt_expert.see("end")
+        self.txt_expert.configure(state="disabled")
 
-        yi_expert.ask_stream(q, cast_result, on_token, on_done, on_error)
+    def _on_expert_done(self):
+        self.btn_ask.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+        self.expert_status_var.set("✓ 解卦完成")
+        self._save_log()
 
-    def _highlight_headers(self):
-        text = self.expert_text.get("1.0", "end")
-        if "**" not in text:
-            return
-        self.expert_text.config(state="normal")
-        self.expert_text.delete("1.0", "end")
-        import re
-        parts = re.split(r"(\*\*[^*]+\*\*)", text)
-        for p in parts:
-            if p.startswith("**") and p.endswith("**") and len(p) > 4:
-                self.expert_text.insert("end", p[2:-2] + "\n", "header")
-            else:
-                self.expert_text.insert("end", p)
-        self.expert_text.config(state="disabled")
+    def _on_expert_error(self, msg):
+        self.btn_ask.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+        self.expert_status_var.set("✗ 失败")
+        self._set_text(self.txt_expert, f"[出错] {msg}\n\n(可点 '设置 API' 切换厂商或修正 model)")
 
-    def _copy_expert(self):
-        if not self.expert_full:
-            messagebox.showinfo("提示", "尚无解卦结果。")
-            return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.expert_full)
-        messagebox.showinfo("已复制", "解卦文本已复制到剪贴板。")
-
-    def _save_expert_to_log(self):
-        if not self.expert_full or not self.last_cast:
-            messagebox.showinfo("提示", "尚无解卦结果。")
+    # ----------------------------------------------------------------
+    # 日志
+    # ----------------------------------------------------------------
+    def _save_log(self):
+        if not self.current_cast:
             return
         try:
-            from datetime import datetime
-            with open(core.LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"\n\n## AI解卦 {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
-                f.write(self.expert_full + "\n")
-            messagebox.showinfo("已保存", f"解卦文本已追加到日志:\n{core.LOG_FILE}")
+            self.LOG_DIR.mkdir(parents=True, exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = self.LOG_DIR / f"cast_{ts}.txt"
+            cast = self.current_cast
+            main = core.HEX_BY_NUM.get(cast["main_num"])
+            extra_txt = self.txt_extra.get("1.0", "end").strip()
+            expert_txt = "".join(self._stream_buf) if self._stream_buf else self.txt_expert.get("1.0", "end").strip()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"# 时间: {datetime.datetime.now().isoformat()}\n")
+                f.write(f"# 问事: {self.last_question}\n")
+                if main:
+                    f.write(f"# 主卦: 第{main[0]}卦 {main[1]}\n")
+                    f.write(f"# 卦辞: {main[5]}\n")
+                    f.write(f"# 象传: {main[6]}\n")
+                f.write(f"# 动爻: {cast.get('moving', [])}\n\n")
+                f.write("## 附加引用\n" + extra_txt + "\n\n")
+                f.write("## AI 解卦\n" + expert_txt + "\n")
+            self.status_var.set(f"已保存日志: {path.name}")
         except Exception as e:
-            messagebox.showerror("保存失败", str(e))
+            self.status_var.set(f"日志保存失败: {e}")
+
+    # ----------------------------------------------------------------
+    # 关闭
+    # ----------------------------------------------------------------
+    def _on_close(self):
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+        self.root.destroy()
+    # ----------------------------------------------------------------
+    # 设置 API(v3.4:URL 匹配强制覆盖 model)
+    # ----------------------------------------------------------------
+    PRESETS = {
+        "DeepSeek(默认,中文好,便宜)":  ("https://api.deepseek.com/v1",               "deepseek-chat"),
+        "OpenAI":                          ("https://api.openai.com/v1",                 "gpt-4o-mini"),
+        "通义千问 Qwen":                   ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
+        "智谱 GLM":                        ("https://open.bigmodel.cn/api/paas/v4",      "glm-4-flash"),
+        "月之暗面 Moonshot":               ("https://api.moonshot.cn/v1",                "moonshot-v1-8k"),
+        "MiniMax / MiniMax":               ("https://api.MiniMax.chat/v1",          "MiniMax-Text-01"),
+        "自定义(手动填 URL/Model)":        ("",                                          ""),
+    }
 
     def _show_expert_config(self):
         win = tk.Toplevel(self.root)
         win.title("设置 AI 解卦 API")
-        win.geometry("560x420")
+        win.geometry("580x460")
         win.transient(self.root)
+        win.configure(bg=THEME["bg"])
         win.grab_set()
 
-        # 预设表
-        PRESETS = {
-            "DeepSeek(默认,中文好,便宜)":  ("https://api.deepseek.com/v1",        "deepseek-chat"),
-            "OpenAI":                         ("https://api.openai.com/v1",          "gpt-4o-mini"),
-            "通义千问 Qwen":                  ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
-            "智谱 GLM":                       ("https://open.bigmodel.cn/api/paas/v4","glm-4-flash"),
-            "月之暗面 Moonshot":              ("https://api.moonshot.cn/v1",         "moonshot-v1-8k"),
-            "MiniMax / MiniMax":              ("https://api.MiniMax.chat/v1",        "MiniMax-Text-01"),
-            "自定义(手动填 URL/Model)":      ("",                                  ""),
-        }
-        names = list(PRESETS.keys())
+        names = list(self.PRESETS.keys())
 
         cfg = yi_expert.load_config()
         cur_url   = (cfg.get("base_url", "") or "").strip() or "https://api.deepseek.com/v1"
         cur_model = (cfg.get("model",    "") or "").strip() or "deepseek-chat"
 
-        # 先按 URL 反查 —— 只要 URL 命中就高亮 preset;不要求 model 也匹配,
-        # 这样旧 config 里 model 写错(如 'minimax-chat')也能被认出来并自动改成正确 model
-        matched_name = "自定义(手动填 URL/Model)"
-        for n, (u, m) in PRESETS.items():
+        # URL 命中即选中 preset,model 字段强制覆盖为 preset 默认值(防 minimax-chat 之类错字段)
+        matched = "自定义(手动填 URL/Model)"
+        for n, (u, m) in self.PRESETS.items():
             if u and u == cur_url:
-                matched_name = n
-                # 强制覆盖 model:如果 cfg 的 model 不等于 preset 默认 model,提示并改成 preset 的
+                matched = n
                 if cur_model != m:
                     cur_model = m
                 break
 
-        url_var   = tk.StringVar(value=cur_url)
-        model_var = tk.StringVar(value=cur_model)
-        preset_var = tk.StringVar(value=matched_name)
-        preset_combo = ttk.Combobox(win, textvariable=preset_var, values=names, state="readonly", width=50)
-        preset_combo.pack(padx=8, pady=4, fill="x")
+        ttk.Label(win, text="厂商预设(选完自动填 URL/Model)", padding=(10, 8, 0, 0),
+                  font=("Noto Serif CJK SC", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(anchor="w")
+        preset_var = tk.StringVar(value=matched)
+        combo = ttk.Combobox(win, textvariable=preset_var, values=names, state="readonly", width=56,
+                             font=("Noto Serif CJK SC", 11))
+        combo.pack(padx=10, pady=4, fill="x")
 
-        ttk.Label(win, text="API Key:", padding=(8, 8, 0, 0)).pack(anchor="w")
+        ttk.Label(win, text="API Key:", background=THEME["bg"]).pack(anchor="w", padx=10)
         key_var = tk.StringVar(value=cfg.get("api_key", ""))
-        ent = ttk.Entry(win, textvariable=key_var, width=70, show="*")
-        ent.pack(padx=8, pady=4, fill="x")
+        ent = ttk.Entry(win, textvariable=key_var, width=70, show="*", font=("Noto Serif CJK SC", 11))
+        ent.pack(padx=10, pady=4, fill="x")
 
-        ttk.Label(win, text="Base URL(OpenAI 兼容):", padding=(8, 8, 0, 0)).pack(anchor="w")
-        url_entry = ttk.Entry(win, textvariable=url_var, width=70)
-        url_entry.pack(padx=8, pady=4, fill="x")
+        ttk.Label(win, text="Base URL(OpenAI 兼容):", background=THEME["bg"]).pack(anchor="w", padx=10)
+        url_var = tk.StringVar(value=cur_url)
+        ttk.Entry(win, textvariable=url_var, width=70, font=("Noto Serif CJK SC", 11)).pack(padx=10, pady=4, fill="x")
 
-        ttk.Label(win, text="Model:", padding=(8, 8, 0, 0)).pack(anchor="w")
-        model_entry = ttk.Entry(win, textvariable=model_var, width=70)
-        model_entry.pack(padx=8, pady=4, fill="x")
+        ttk.Label(win, text="Model:", background=THEME["bg"]).pack(anchor="w", padx=10)
+        model_var = tk.StringVar(value=cur_model)
+        ttk.Entry(win, textvariable=model_var, width=70, font=("Noto Serif CJK SC", 11)).pack(padx=10, pady=4, fill="x")
 
         def on_preset(_evt=None):
             n = preset_var.get()
             if n == "自定义(手动填 URL/Model)":
                 return
-            u, m = PRESETS[n]
-            url_var.set(u)
-            model_var.set(m)
-            # 切预设后立刻保存(若已有 API key 也不会清掉)
-            _do_save(silent=True)
-        preset_combo.bind("<<ComboboxSelected>>", on_preset)
+            u, m = self.PRESETS[n]
+            url_var.set(u); model_var.set(m)
+            save(silent=True)
 
-        ttk.Label(win, text="注:DeepSeek/通义/GLM/Moonshot/MiniMax 都走 OpenAI 兼容接口,只要 Key + URL + Model 对得上。",
-                  foreground="#666", padding=(8, 8, 0, 4), wraplength=520).pack(anchor="w")
+        combo.bind("<<ComboboxSelected>>", on_preset)
 
-        def _do_save(silent=False):
+        ttk.Label(win, text="注:DeepSeek/通义/GLM/Moonshot/MiniMax 都走 OpenAI 兼容接口,只要 Key + URL + Model 对得上。\n"
+                            "若报 'unknown model',去厂商后台查实际可用模型名填入。",
+                  background=THEME["bg"], foreground=THEME["muted"],
+                  font=("Noto Serif CJK SC", 9), wraplength=540).pack(anchor="w", padx=10, pady=4)
+
+        def save(silent=False):
             yi_expert.save_config({
                 "provider": preset_var.get(),
                 "api_key":  key_var.get().strip(),
@@ -569,57 +772,56 @@ class YiApp:
                 "model":    model_var.get().strip() or "deepseek-chat",
             })
             if not silent:
-                messagebox.showinfo("已保存", "配置已保存到:\n" + str(yi_expert.CONFIG_FILE), parent=win)
+                messagebox.showinfo("已保存", f"配置已保存到:\n{yi_expert.CONFIG_FILE}", parent=win)
                 win.destroy()
 
-        def save():
-            _do_save()
-
+        bf = ttk.Frame(win, style="TFrame")
+        bf.pack(pady=10)
         def show_key():
             ent.config(show="" if ent.cget("show") == "*" else "*")
-
-        bf = ttk.Frame(win)
-        bf.pack(pady=12)
         ttk.Button(bf, text="显示/隐藏 Key", command=show_key).pack(side="left", padx=4)
-        ttk.Button(bf, text="保存", command=save).pack(side="left", padx=4)
+        ttk.Button(bf, text="保存", style="Accent.TButton", command=save).pack(side="left", padx=4)
         ttk.Button(bf, text="取消", command=win.destroy).pack(side="left", padx=4)
 
         ent.focus_set()
 
 
+# ============================================================
+# 自测 / 入口
+# ============================================================
 def self_test() -> bool:
-    """自测:验证 yi_core 数据 + YiApp 可实例化,不弹窗。"""
+    """不弹窗,验证 core + tk + YiApp 可实例化。"""
     print(f"  yi_core HEX: {len(core.HEX)} (expect 64)")
     assert len(core.HEX) == 64
-
-    r = core.cast("自测", seed=42)
-    print(f"  cast: main=#{r['main_num']} nuclear=#{r['nuclear_num']} changed=#{r['changed_num']}")
-
-    for kw in ["龙", "水", "贞"]:
-        hits = core.search_hex(kw)
-        print(f"  search {kw}: {len(hits)} hits")
-
-    print(f"  YiApp class defined OK")
-
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        app = YiApp(root)
-        print(f"  YiApp instantiated OK (3 tabs, 64 hexagrams loaded)")
-        root.destroy()
-    except Exception as e:
-        print(f"  YiApp instantiation failed: {e}")
-        return False
+    # 验一卦
+    h = core.HEX[0]
+    assert h[0] == 1 and h[1] == "乾"
+    cast = core.cast("自测", seed=42)
+    print(f"  sample cast: main={cast['main_num']} nuclear={cast['nuclear_num']} changed={cast.get('changed_num')}")
+    # 模拟一次 ask,但不联网
+    prompt = yi_expert.build_user_prompt("近期事业", cast)
+    assert "主卦" in prompt
+    # 弹窗 smoke test
+    root = tk.Tk(); root.withdraw()
+    app = YiApp(root)
+    app._do_cast()
+    app._clear_cast()
+    root.destroy()
+    print("  YiApp instance + _do_cast + _clear_cast OK")
     return True
 
 
 def main():
     root = tk.Tk()
-    YiApp(root)
+    app = YiApp(root)
     root.mainloop()
 
 
 if __name__ == "__main__":
-    if "--self-test" in sys.argv:
-        sys.exit(0 if self_test() else 1)
+    import sys as _s
+    if "--self-test" in _s.argv:
+        print("[self-test]")
+        ok = self_test()
+        print("OK" if ok else "FAIL")
+        _s.exit(0 if ok else 1)
     main()
