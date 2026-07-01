@@ -143,11 +143,11 @@ class YiApp:
         q = self.q_var.get().strip()
         lines = core.cast_six_lines()
         main_bin = core.lines_to_binary(lines)
-        main = core.HEX_BY_BIN[main_bin]
+        main = core.binary_to_hex(main_bin)
         nuclear_bin = core.nuclear_hex(lines)
-        nuclear = core.HEX_BY_BIN[nuclear_bin]
+        nuclear = core.binary_to_hex(nuclear_bin)
         changed_bin = core.changed_binary(lines)
-        changed = core.HEX_BY_BIN[changed_bin]
+        changed = core.binary_to_hex(changed_bin)
         any_change = any(l[2] in ("老阴", "老阳") for l in lines)
 
         # 主卦画法:用真实爻
