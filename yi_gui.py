@@ -514,16 +514,23 @@ class YiApp:
         names = list(PRESETS.keys())
 
         cfg = yi_expert.load_config()
-        url_var = tk.StringVar(value=cfg.get("base_url", "https://api.deepseek.com/v1"))
-        model_var = tk.StringVar(value=cfg.get("model", "deepseek-chat"))
+        cur_url   = (cfg.get("base_url", "") or "").strip() or "https://api.deepseek.com/v1"
+        cur_model = (cfg.get("model",    "") or "").strip() or "deepseek-chat"
 
-        ttk.Label(win, text="提供商预设(选完自动填 URL/Model,可再改):", padding=(8, 8, 0, 0)).pack(anchor="w")
-        preset_var = tk.StringVar(value=names[0])
-        # 反查当前 cfg 匹配哪个预设
+        # 先按 URL 反查 —— 只要 URL 命中就高亮 preset;不要求 model 也匹配,
+        # 这样旧 config 里 model 写错(如 'minimax-chat')也能被认出来并自动改成正确 model
+        matched_name = "自定义(手动填 URL/Model)"
         for n, (u, m) in PRESETS.items():
-            if u == url_var.get() and m == model_var.get():
-                preset_var.set(n)
+            if u and u == cur_url:
+                matched_name = n
+                # 强制覆盖 model:如果 cfg 的 model 不等于 preset 默认 model,提示并改成 preset 的
+                if cur_model != m:
+                    cur_model = m
                 break
+
+        url_var   = tk.StringVar(value=cur_url)
+        model_var = tk.StringVar(value=cur_model)
+        preset_var = tk.StringVar(value=matched_name)
         preset_combo = ttk.Combobox(win, textvariable=preset_var, values=names, state="readonly", width=50)
         preset_combo.pack(padx=8, pady=4, fill="x")
 
@@ -547,20 +554,26 @@ class YiApp:
             u, m = PRESETS[n]
             url_var.set(u)
             model_var.set(m)
+            # 切预设后立刻保存(若已有 API key 也不会清掉)
+            _do_save(silent=True)
         preset_combo.bind("<<ComboboxSelected>>", on_preset)
 
         ttk.Label(win, text="注:DeepSeek/通义/GLM/Moonshot/MiniMax 都走 OpenAI 兼容接口,只要 Key + URL + Model 对得上。",
                   foreground="#666", padding=(8, 8, 0, 4), wraplength=520).pack(anchor="w")
 
-        def save():
+        def _do_save(silent=False):
             yi_expert.save_config({
                 "provider": preset_var.get(),
-                "api_key": key_var.get().strip(),
+                "api_key":  key_var.get().strip(),
                 "base_url": url_var.get().strip() or "https://api.deepseek.com/v1",
-                "model": model_var.get().strip() or "deepseek-chat",
+                "model":    model_var.get().strip() or "deepseek-chat",
             })
-            messagebox.showinfo("已保存", "配置已保存到:\n" + str(yi_expert.CONFIG_FILE), parent=win)
-            win.destroy()
+            if not silent:
+                messagebox.showinfo("已保存", "配置已保存到:\n" + str(yi_expert.CONFIG_FILE), parent=win)
+                win.destroy()
+
+        def save():
+            _do_save()
 
         def show_key():
             ent.config(show="" if ent.cget("show") == "*" else "*")
